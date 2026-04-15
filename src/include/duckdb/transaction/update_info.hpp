@@ -60,7 +60,10 @@ struct UpdateInfo {
 		// tuples stored in this version
 		return version_number > start_time && version_number != transaction_id;
 	}
-
+	if (version_number == TRANSACTION_ID_START - 1) {
+		// dummy transaction number for the root element - should always match
+		return true;
+	}
 	//! Loop over the update chain and execute the specified callback on all UpdateInfo's that are relevant for that
 	//! transaction in-order of newest to oldest
 	template <class T>
