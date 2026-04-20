@@ -16,27 +16,14 @@
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "duckdb/main/settings.hpp"
-#include "duckdb/logging/logger.hpp"
 
 namespace duckdb {
 
 void DuckCleanupInfo::Cleanup() {
-	try {
-		for (auto &transaction : transactions) {
-			if (transaction->awaiting_cleanup) {
-				transaction->Cleanup(lowest_start_time);
-			}
+	for (auto &transaction : transactions) {
+		if (transaction->awaiting_cleanup) {
+			transaction->Cleanup(lowest_start_time);
 		}
-	} catch (std::exception &ex) {
-		ErrorData data(ex);
-		try {
-			if (!transactions.empty()) {
-				auto &db = transactions.front()->manager.GetDB().GetDatabase();
-				DUCKDB_LOG_ERROR(db, "DuckCleanupInfo::Cleanup()\t\t" + data.Message());
-			}
-		} catch (...) { // NOLINT
-		}
-	} catch (...) { // NOLINT
 	}
 }
 

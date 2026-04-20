@@ -483,11 +483,14 @@ void LocalFileSystem::Read(FileHandle &handle, void *buffer, int64_t nr_bytes, i
 			                  strerror(errno));
 		}
 		if (bytes_read == 0) {
-			if (handle.logger) {
-				DUCKDB_LOG_ERROR(handle.logger, "LocalFileSystem::Read short-read on \"" + handle.path +
-				                                    "\" at location " + std::to_string(location) + " (requested " +
-				                                    std::to_string(nr_bytes) + " bytes)\n" +
-				                                    StackTrace::GetStackTrace());
+			try {
+				if (handle.logger) {
+					DUCKDB_LOG_ERROR(handle.logger, "Could not read enough bytes from file \"" + handle.path +
+					                                    "\": attempted to read " + std::to_string(nr_bytes) +
+					                                    " bytes from location " + std::to_string(location) + "\n" +
+					                                    StackTrace::GetStackTrace());
+				}
+			} catch (...) { // NOLINT
 			}
 			throw IOException(
 			    "Could not read enough bytes from file \"%s\": attempted to read %llu bytes from location %llu",

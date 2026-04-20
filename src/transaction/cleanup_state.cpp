@@ -10,32 +10,11 @@
 #include "duckdb/storage/table/chunk_info.hpp"
 #include "duckdb/storage/table/update_segment.hpp"
 #include "duckdb/storage/table/row_version_manager.hpp"
-#include "duckdb/common/error_data.hpp"
-#include "duckdb/logging/logger.hpp"
-#include "duckdb/main/attached_database.hpp"
 
 namespace duckdb {
 
 CleanupState::CleanupState(transaction_t lowest_active_transaction)
     : lowest_active_transaction(lowest_active_transaction), current_table(nullptr), count(0) {
-}
-
-CleanupState::~CleanupState() {
-	// Flush() can throw FatalException; destructors are implicitly noexcept, so an escaping exception
-	// here would call std::terminate before it could reach DuckCleanupInfo::Cleanup's catch block.
-	try {
-		Flush();
-	} catch (std::exception &ex) {
-		ErrorData data(ex);
-		try {
-			if (current_table) {
-				auto &db = current_table->GetAttached().GetDatabase();
-				DUCKDB_LOG_ERROR(db, "CleanupState::~CleanupState()\t\t" + data.Message());
-			}
-		} catch (...) { // NOLINT
-		}
-	} catch (...) { // NOLINT
-	}
 }
 
 void CleanupState::CleanupEntry(UndoFlags type, data_ptr_t data) {
