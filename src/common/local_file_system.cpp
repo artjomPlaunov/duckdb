@@ -11,6 +11,8 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/logging/file_system_logger.hpp"
 #include "duckdb/logging/log_manager.hpp"
+#include "duckdb/logging/logger.hpp"
+#include "duckdb/common/stacktrace.hpp"
 
 #include <cstdint>
 #include <cstdio>
@@ -481,6 +483,12 @@ void LocalFileSystem::Read(FileHandle &handle, void *buffer, int64_t nr_bytes, i
 			                  strerror(errno));
 		}
 		if (bytes_read == 0) {
+			if (handle.logger) {
+				DUCKDB_LOG_ERROR(handle.logger, "LocalFileSystem::Read short-read on \"" + handle.path +
+				                                    "\" at location " + std::to_string(location) + " (requested " +
+				                                    std::to_string(nr_bytes) + " bytes)\n" +
+				                                    StackTrace::GetStackTrace());
+			}
 			throw IOException(
 			    "Could not read enough bytes from file \"%s\": attempted to read %llu bytes from location %llu",
 			    handle.path, nr_bytes, location);
