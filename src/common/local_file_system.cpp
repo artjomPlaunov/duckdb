@@ -485,10 +485,11 @@ void LocalFileSystem::Read(FileHandle &handle, void *buffer, int64_t nr_bytes, i
 		if (bytes_read == 0) {
 			try {
 				if (handle.logger) {
-					DUCKDB_LOG_ERROR(handle.logger, "Could not read enough bytes from file \"" + handle.path +
-					                                    "\": attempted to read " + std::to_string(nr_bytes) +
-					                                    " bytes from location " + std::to_string(location) + "\n" +
-					                                    StackTrace::GetStackTrace());
+					DUCKDB_LOG_ERROR(
+					    handle.logger,
+					    "Could not read enough bytes from file \"%s\": attempted to read %llu bytes from location "
+					    "%llu\n%s",
+					    handle.path, nr_bytes, location, StackTrace::GetStackTrace());
 				}
 			} catch (...) { // NOLINT
 			}
