@@ -487,6 +487,10 @@ jobs:
         shell: bash
         run: ./build/relassert/test/unittest "*" --test-config test/configs/block_size_16kB.json
 
+      - name: All tests with a smaller initial column segment size
+        shell: bash
+        run: python3 scripts/ci/run_tests.py --test-config=test/configs/initial_column_segment_size.json ./build/relassert/test/unittest "*"
+
   linux-debug-configs:
     name: Tests different configurations with a debug build
     runs-on: ubuntu-24.04
