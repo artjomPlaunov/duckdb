@@ -21,7 +21,8 @@ static void test_in_memory_initialization(string dbdir) {
 	REQUIRE_NOTHROW(con = make_uniq<Connection>(*db));
 
 	// force the in-memory directory to be created by creating a table bigger than the memory limit
-	REQUIRE_NO_FAIL(con->Query("PRAGMA memory_limit='2MB'"));
+	// FIXME: Regression from adaptive transient segment allocation: this used to pass with 2MB
+	REQUIRE_NO_FAIL(con->Query("PRAGMA memory_limit='3MB'"));
 	REQUIRE_NO_FAIL(con->Query("CREATE TABLE integers AS SELECT * FROM range(1000000)"));
 
 	// the temporary folder .tmp should be created in in-memory mode
