@@ -1192,7 +1192,9 @@ void ShellState::OpenDB(ShellOpenFlags flags) {
 			}
 		}
 		auto &client_config = duckdb::ClientConfig::GetConfig(*conn->context);
-		client_config.display_create_func = CreateProgressBar;
+		if (stdout_is_console) {
+			client_config.display_create_func = CreateProgressBar;
+		}
 #ifdef SHELL_INLINE_AUTOCOMPLETE
 		db->LoadStaticExtension<duckdb::AutocompleteExtension>();
 #endif
@@ -2822,12 +2824,12 @@ int ShellState::ProcessInput(InputMode mode) {
 			}
 			continue;
 		}
-		if (zLine && (zLine[0] == '.' || zLine[0] == '#') && nSql == 0) {
+		if ((zLine[0] == '.' || zLine[0] == '#') && nSql == 0) {
 			if (ShellHasFlag(ShellFlags::SHFLG_Echo)) {
 				printf("%s\n", zLine);
 			}
 			if (zLine[0] == '.') {
-				if (mode == InputMode::STANDARD && zLine && *zLine && *zLine != '\3') {
+				if (mode == InputMode::STANDARD && *zLine && *zLine != '\3') {
 					ShellAddHistory(zLine);
 				}
 				rc = DoMetaCommand(zLine);

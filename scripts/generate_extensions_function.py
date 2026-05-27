@@ -332,9 +332,6 @@ def get_extension_names() -> List[str]:
         next(f)
         for line in f:
             extension_name = line.split(',')[0].rstrip()
-            if "jemalloc" in extension_name:
-                # We skip jemalloc as it doesn't produce a loadable extension but is in the config
-                continue
             extension_names.append(extension_name)
     return extension_names
 
@@ -871,6 +868,7 @@ static constexpr ExtensionEntry EXTENSION_SECRET_PROVIDERS[] = {{"s3/config", "h
                                                                 {"gcs/credential_chain", "aws"},
                                                                 {"r2/credential_chain", "aws"},
                                                                 {"aws/credential_chain", "aws"},
+                                                                {"rds/credential_chain", "aws"},
                                                                 {"azure/access_token", "azure"},
                                                                 {"azure/config", "azure"},
                                                                 {"azure/credential_chain", "azure"},
@@ -883,10 +881,10 @@ static constexpr ExtensionEntry EXTENSION_SECRET_PROVIDERS[] = {{"s3/config", "h
 }; // EXTENSION_SECRET_PROVIDERS
 
 static constexpr const char *AUTOLOADABLE_EXTENSIONS[] = {
+    "autocomplete",
     "avro",
     "aws",
     "azure",
-    "autocomplete",
     "core_functions",
     "delta",
     "ducklake",
@@ -895,19 +893,20 @@ static constexpr const char *AUTOLOADABLE_EXTENSIONS[] = {
     "fts",
     "httpfs",
     "iceberg",
-    "inet",
     "icu",
+    "inet",
     "json",
     "motherduck",
     "mysql_scanner",
     "parquet",
+    "postgres_scanner",
+    "quack",
     "sqlite_scanner",
     "sqlsmith",
-    "postgres_scanner",
     "tpcds",
     "tpch",
-    "unity_catalog",
-    "ui"
+    "ui",
+    "unity_catalog"
 }; // END_OF_AUTOLOADABLE_EXTENSIONS
 
 } // namespace duckdb"""
