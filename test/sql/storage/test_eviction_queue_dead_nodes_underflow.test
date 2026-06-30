@@ -1,0 +1,61 @@
+# name: test/sql/storage/test_eviction_queue_dead_nodes_underflow.test
+# description: repro for eviction queue dead-node counter underflow
+# group: [storage]
+
+require no_alternative_verify
+
+statement ok
+PRAGMA memory_limit='100MB'
+
+statement ok
+PRAGMA temp_directory='__TEST_DIR__/eviction_dead_nodes_underflow'
+
+statement ok
+SET debug_force_external=true
+
+statement ok
+SET debug_eviction_queue_sleep_micro_seconds=10
+
+statement ok
+SELECT i FROM range(2000000) t(i) ORDER BY i % 7919, i;
+
+statement ok
+SELECT COUNT(*) FROM (SELECT i % 1000000 AS g, COUNT(*) AS c FROM range(2000000) t(i) GROUP BY 1) sub;
+
+statement ok
+SELECT COUNT(*) FROM (SELECT DISTINCT i FROM range(2000000) t(i)) sub;
+
+statement ok
+SELECT COUNT(*) FROM (SELECT i, SUM(i) OVER (PARTITION BY i % 100000 ORDER BY i) AS w FROM range(1000000) t(i)) sub;
+
+statement ok
+SELECT COUNT(*) FROM range(1000000) a(i) JOIN range(1000000) b(i) USING (i);
+
+statement ok
+CREATE TABLE t1 AS SELECT i, i % 100 AS j, (i * 2)::VARCHAR AS s FROM range(2000000) t(i);
+
+statement ok
+SELECT COUNT(*), SUM(i), SUM(j), MAX(LENGTH(s)) FROM t1;
+
+statement ok
+SELECT j, COUNT(*) FROM t1 GROUP BY j ORDER BY j;
+
+statement ok
+SELECT COUNT(*) FROM t1 a JOIN t1 b USING (i);
+
+statement ok
+SET debug_eviction_queue_sleep_micro_seconds=0
+
+statement ok
+RESET debug_force_external
+
+statement ok
+PRAGMA memory_limit='1GB'
+
+query I
+SELECT COUNT(*) = 0
+FROM duckdb_eviction_queues()
+WHERE dead_nodes < 0
+   OR dead_nodes > total_insertions;
+----
+1
