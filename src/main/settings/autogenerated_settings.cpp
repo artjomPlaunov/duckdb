@@ -58,6 +58,9 @@ void ArrowOutputVersionSetting::OnSet(SettingCallbackInfo &info, Value &paramete
 // Checkpoint On Detach
 //===----------------------------------------------------------------------===//
 void CheckpointOnDetachSetting::OnSet(SettingCallbackInfo &info, Value &parameter) {
+	if (parameter.IsNull()) {
+		throw InvalidInputException("checkpoint_on_detach setting cannot be NULL");
+	}
 	EnumUtil::FromString<CheckpointOnDetach>(StringValue::Get(parameter));
 }
 
