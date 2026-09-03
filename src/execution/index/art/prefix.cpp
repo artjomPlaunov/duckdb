@@ -139,6 +139,55 @@ void PrefixHandle::Append(ART &art, PrefixHandle prefix, NodePtr other) {
 	prefix.Child(art) = other;
 }
 
+GateStatus PrefixHandle::Split(ART &art, SlotHandle &slot, NodePtr &child, const uint8_t pos) {
+	D_ASSERT(slot.Ref().HasMetadata());
+	D_ASSERT(slot.Ref().GetType() == PREFIX);
+
+	GateStatus split_status;
+	{
+		PrefixHandle prefix(NodeHandle(art, slot.Ref()));
+		const auto count = prefix.GetCount(art);
+		D_ASSERT(pos < count);
+
+		if (pos + 1 == art.PrefixCount()) {
+			prefix.SetCount(art, UnsafeNumericCast<uint8_t>(count - 1));
+			auto &prefix_child = prefix.Child(art);
+			child = prefix_child;
+			auto pin = std::move(prefix).TakeHandle();
+			slot.Rebind(prefix_child, std::move(pin));
+			return GateStatus::GATE_NOT_SET;
+		}
+
+		if (pos + 1 < count) {
+			SlotHandle child_slot(child);
+			const auto suffix_count = UnsafeNumericCast<uint8_t>(count - pos - 1);
+			auto new_prefix = NewInternal(art, child_slot, prefix.Data(), suffix_count, pos + 1);
+			auto prefix_child = prefix.Child(art);
+
+			if (prefix_child.GetType() == PREFIX && prefix_child.GetGateStatus() == GateStatus::GATE_NOT_SET) {
+				Append(art, std::move(new_prefix), prefix_child);
+			} else {
+				new_prefix.Child(art) = prefix_child;
+			}
+		} else {
+			D_ASSERT(pos + 1 == count);
+			child = prefix.Child(art);
+		}
+
+		prefix.SetCount(art, pos);
+		if (pos != 0) {
+			auto &prefix_child = prefix.Child(art);
+			auto pin = std::move(prefix).TakeHandle();
+			slot.Rebind(prefix_child, std::move(pin));
+			return GateStatus::GATE_NOT_SET;
+		}
+		split_status = slot.Ref().GetGateStatus();
+	}
+
+	NodePtr::FreeNode(art, slot.Ref());
+	return split_status;
+}
+
 void Prefix::Concat(ART &art, NodePtr &parent, NodePtr &node4, const NodePtr child, uint8_t byte,
                     const GateStatus node4_status, const GateStatus status) {
 	// We have four situations from which we enter here:

@@ -35,6 +35,8 @@ public:
 public:
 	//! Create a new prefix chain. The slot points to the child of the last prefix node.
 	static void New(ART &art, SlotHandle &slot, const ARTKey &key, const idx_t depth, idx_t count);
+	//! Split a prefix at pos. The slot points to the location where the replacement node must be created.
+	static GateStatus Split(ART &art, SlotHandle &slot, NodePtr &child, const uint8_t pos);
 
 	//! Create a new deprecated prefix node and return a handle to it.
 	static NodeHandle NewDeprecated(FixedSizeAllocator &allocator, NodePtr &node);
