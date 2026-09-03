@@ -199,9 +199,12 @@ void Leaf::TransformToDeprecated(ART &art, NodePtr &node) {
 
 void Leaf::DeprecatedFree(ART &art, NodePtr &node) {
 	D_ASSERT(node.GetType() == LEAF);
-	NodePtr next;
 	while (node.HasMetadata()) {
-		next = NodePtr::Ref<Leaf>(art, node, LEAF).next_leaf;
+		NodePtr next;
+		{
+			ConstNodeHandle handle(art, node);
+			next = handle.Get<Leaf>().next_leaf;
+		}
 		NodePtr::FreeNode(art, node);
 		node = next;
 	}
