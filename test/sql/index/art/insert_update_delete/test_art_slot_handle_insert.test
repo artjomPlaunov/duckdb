@@ -1,0 +1,145 @@
+# name: test/sql/index/art/insert_update_delete/test_art_slot_handle_insert.test
+# description: Test handle-aware ART insertion paths
+# group: [insert_update_delete]
+
+statement ok
+SET index_scan_percentage = 1.0;
+
+statement ok
+SET index_scan_max_count = 0;
+
+# Split at the start of a full prefix and append its remaining prefix chain.
+statement ok
+CREATE TABLE split_start (key VARCHAR);
+
+statement ok
+CREATE INDEX split_start_idx ON split_start(key);
+
+statement ok
+INSERT INTO split_start VALUES (repeat('a', 40));
+
+statement ok
+INSERT INTO split_start VALUES ('b' || repeat('a', 39));
+
+query I
+SELECT count(*) FROM split_start WHERE key IN (repeat('a', 40), 'b' || repeat('a', 39));
+----
+2
+
+# Split at the final byte of a full prefix node.
+statement ok
+CREATE TABLE split_full (key VARCHAR);
+
+statement ok
+CREATE INDEX split_full_idx ON split_full(key);
+
+statement ok
+INSERT INTO split_full VALUES (repeat('a', 14));
+
+statement ok
+INSERT INTO split_full VALUES (repeat('a', 14) || 'x');
+
+query I
+SELECT count(*) FROM split_full WHERE key IN (repeat('a', 14), repeat('a', 14) || 'x');
+----
+2
+
+# Split at the final byte of a partially filled prefix node.
+statement ok
+CREATE TABLE split_partial (key VARCHAR);
+
+statement ok
+CREATE INDEX split_partial_idx ON split_partial(key);
+
+statement ok
+INSERT INTO split_partial VALUES ('short');
+
+statement ok
+INSERT INTO split_partial VALUES ('shorter');
+
+query I
+SELECT count(*) FROM split_partial WHERE key IN ('short', 'shorter');
+----
+2
+
+# Descend through multiple matching prefix nodes and an existing internal-node child.
+statement ok
+CREATE TABLE prefix_descent (key VARCHAR);
+
+statement ok
+CREATE INDEX prefix_descent_idx ON prefix_descent(key);
+
+statement ok
+INSERT INTO prefix_descent VALUES (repeat('p', 35) || 'a');
+
+statement ok
+INSERT INTO prefix_descent VALUES (repeat('p', 35) || 'b');
+
+statement ok
+INSERT INTO prefix_descent VALUES (repeat('p', 35) || 'c');
+
+query I
+SELECT count(*) FROM prefix_descent WHERE key LIKE repeat('p', 35) || '%';
+----
+3
+
+# Grow the same internal node through Node4, Node16, Node48, and Node256.
+# The duplicate row IDs 0, 256, and 257 also exercise nested-leaf insertion.
+statement ok
+CREATE TABLE node_descent (key INTEGER);
+
+statement ok
+CREATE INDEX node_descent_idx ON node_descent(key);
+
+loop i 0 256
+
+statement ok
+INSERT INTO node_descent VALUES ({i});
+
+endloop
+
+statement ok
+INSERT INTO node_descent VALUES (0);
+
+statement ok
+INSERT INTO node_descent VALUES (0);
+
+query II
+SELECT count(*), count(*) FILTER (WHERE key = 0) FROM node_descent;
+----
+258	3
+
+# Load a deprecated leaf and convert it back to a nested leaf during insertion.
+statement ok
+ATTACH '{TEST_DIR}/slot_handle_insert_legacy.db' AS legacy (STORAGE_VERSION 'v1.0.0');
+
+statement ok
+CREATE TABLE legacy.entries (key INTEGER, payload INTEGER);
+
+statement ok
+CREATE INDEX legacy_entries_idx ON legacy.entries(key);
+
+statement ok
+INSERT INTO legacy.entries VALUES (42, 1);
+
+statement ok
+INSERT INTO legacy.entries VALUES (42, 2);
+
+statement ok
+CHECKPOINT legacy;
+
+statement ok
+DETACH legacy;
+
+statement ok
+ATTACH '{TEST_DIR}/slot_handle_insert_legacy.db' AS legacy;
+
+statement ok
+INSERT INTO legacy.entries VALUES (42, 3);
+
+query I
+SELECT payload FROM legacy.entries WHERE key = 42 ORDER BY payload;
+----
+1
+2
+3

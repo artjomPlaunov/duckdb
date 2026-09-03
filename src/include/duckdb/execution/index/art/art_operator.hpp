@@ -119,29 +119,28 @@ public:
 	static ARTConflictType Insert(ArenaAllocator &arena, ART &art, NodePtr &node, const ARTKey &key, idx_t depth,
 	                              const ARTKey &row_id, GateStatus status, DeleteIndexInfo delete_index_info,
 	                              const IndexAppendMode append_mode) {
-		reference<NodePtr> active_node_ref(node);
+		SlotHandle active_slot(node);
 		reference<const ARTKey> active_key_ref(key);
 
 		// Early-out, if the node is empty.
-		if (!node.HasMetadata()) {
+		if (!active_slot.Ref().HasMetadata()) {
 			D_ASSERT(depth == 0);
 			if (status == GateStatus::GATE_SET) {
-				Leaf::New(node, row_id.GetRowId());
+				Leaf::New(active_slot.Ref(), row_id.GetRowId());
 				return ARTConflictType::NO_CONFLICT;
 			}
 
-			Prefix::New(art, active_node_ref, active_key_ref.get(), depth, active_key_ref.get().len);
-			Leaf::New(active_node_ref, row_id.GetRowId());
+			PrefixHandle::New(art, active_slot, active_key_ref.get(), depth, active_key_ref.get().len);
+			Leaf::New(active_slot.Ref(), row_id.GetRowId());
 			return ARTConflictType::NO_CONFLICT;
 		}
 
-		while (active_node_ref.get().HasMetadata()) {
-			auto &active_node = active_node_ref.get();
+		while (active_slot.Ref().HasMetadata()) {
 			auto &active_key = active_key_ref.get();
 
 			// status is GATE_SET, if we've passed a gate in the previous iteration.
 			// In that case, we have not adjusted the reference.
-			if (status == GateStatus::GATE_NOT_SET && active_node.GetGateStatus() == GateStatus::GATE_SET) {
+			if (status == GateStatus::GATE_NOT_SET && active_slot.Ref().GetGateStatus() == GateStatus::GATE_SET) {
 				if (!art.IsUnique()) {
 					// Enter a gate.
 					active_key_ref = row_id;
@@ -163,14 +162,14 @@ public:
 				                     art.name);
 			}
 
-			const auto type = active_node.GetType();
+			const auto type = active_slot.Ref().GetType();
 			switch (type) {
 			case NType::LEAF_INLINED: {
-				return InsertIntoInlined(arena, art, active_node, key, row_id, depth, status, delete_index_info,
+				return InsertIntoInlined(arena, art, active_slot, key, row_id, depth, status, delete_index_info,
 				                         append_mode);
 			}
 			case NType::LEAF: {
-				Leaf::TransformToNested(art, active_node);
+				Leaf::TransformToNested(art, active_slot.Ref());
 				continue;
 			}
 			case NType::NODE_7_LEAF:
@@ -178,7 +177,7 @@ public:
 			case NType::NODE_256_LEAF: {
 				// Row IDs are unique; there are never any duplicate byte conflicts.
 				auto byte = active_key[Prefix::ROW_ID_COUNT];
-				NodePtr::InsertChild(art, active_node, byte);
+				NodePtr::InsertChild(art, active_slot.Ref(), byte);
 				return ARTConflictType::NO_CONFLICT;
 			}
 			case NType::NODE_4:
@@ -186,29 +185,46 @@ public:
 			case NType::NODE_48:
 			case NType::NODE_256: {
 				D_ASSERT(depth < active_key.len);
-				auto child = active_node.GetChildMutable(art, active_key[depth]);
-				if (child) {
-					// Continue in the child.
-					active_node_ref = *child;
-					depth++;
-					D_ASSERT(active_node_ref.get().HasMetadata());
-					continue;
+				{
+					NodeHandle handle(art, active_slot.Ref());
+					auto child = NodePtr::GetChildSlotFromHandle(handle, active_key[depth]);
+					if (child) {
+						// Continue in the child.
+						active_slot.Rebind(*child, std::move(handle));
+						depth++;
+						D_ASSERT(active_slot.Ref().HasMetadata());
+						continue;
+					}
 				}
-				InsertIntoNode(art, active_node, key, row_id, depth, status);
+				InsertIntoNode(art, active_slot, key, row_id, depth, status);
 				return ARTConflictType::NO_CONFLICT;
 			}
 			case NType::PREFIX: {
-				Prefix prefix(art, active_node, true);
-				for (idx_t i = 0; i < prefix.data[art.PrefixCount()]; i++) {
-					if (prefix.data[i] != active_key[depth]) {
-						// The active key and the prefix don't match.
-						InsertIntoPrefix(art, active_node_ref, active_key, row_id, i, depth, status);
-						return ARTConflictType::NO_CONFLICT;
+				idx_t pos = 0;
+				uint8_t count;
+				{
+					PrefixHandle prefix(NodeHandle(art, active_slot.Ref()));
+					count = prefix.GetCount(art);
+					for (; pos < count; pos++) {
+						if (prefix.GetByte(pos) != active_key[depth]) {
+							break;
+						}
+						depth++;
 					}
-					depth++;
+
+					if (pos == count) {
+						auto &child = prefix.Child(art);
+						auto pin = std::move(prefix).TakeHandle();
+						active_slot.Rebind(child, std::move(pin));
+					}
 				}
-				active_node_ref = *prefix.child_slot;
-				D_ASSERT(active_node_ref.get().HasMetadata());
+
+				if (pos != count) {
+					// The active key and the prefix don't match.
+					InsertIntoPrefix(art, active_slot, active_key, row_id, pos, depth, status);
+					return ARTConflictType::NO_CONFLICT;
+				}
+				D_ASSERT(active_slot.Ref().HasMetadata());
 				continue;
 			}
 			default:
@@ -334,14 +350,14 @@ public:
 	}
 
 private:
-	static ARTConflictType InsertIntoInlined(ArenaAllocator &arena, ART &art, NodePtr &node, const ARTKey &key,
+	static ARTConflictType InsertIntoInlined(ArenaAllocator &arena, ART &art, SlotHandle &slot, const ARTKey &key,
 	                                         const ARTKey &row_id, const idx_t depth, const GateStatus status,
 	                                         DeleteIndexInfo delete_index_info, const IndexAppendMode append_mode) {
 		NodePtr row_id_node;
 		Leaf::New(row_id_node, row_id.GetRowId());
 
 		if (!art.IsUnique() || append_mode == IndexAppendMode::INSERT_DUPLICATES) {
-			Leaf::MergeInlined(arena, art, node, row_id_node, status, depth);
+			Leaf::MergeInlined(arena, art, slot, row_id_node, status, depth);
 			return ARTConflictType::NO_CONFLICT;
 		}
 
@@ -358,13 +374,13 @@ private:
 				// Thus, the local index has a newer (local) row ID, and this is a constraint violation.
 				D_ASSERT(delete_leaf.Get().GetType() == NType::LEAF_INLINED);
 				auto deleted_row_id = delete_leaf.Get().GetRowId();
-				auto this_row_id = node.GetRowId();
+				auto this_row_id = slot.Ref().GetRowId();
 				if (deleted_row_id != this_row_id) {
 					continue;
 				}
 
 				// The deleted key and its row ID match the current key and its row ID.
-				Leaf::MergeInlined(arena, art, node, row_id_node, status, depth);
+				Leaf::MergeInlined(arena, art, slot, row_id_node, status, depth);
 				return ARTConflictType::NO_CONFLICT;
 			}
 		}
@@ -374,14 +390,14 @@ private:
 		return ARTConflictType::CONSTRAINT;
 	}
 
-	static void InsertIntoNode(ART &art, NodePtr &node, const ARTKey &key, const ARTKey &row_id, const idx_t depth,
+	static void InsertIntoNode(ART &art, SlotHandle &slot, const ARTKey &key, const ARTKey &row_id, const idx_t depth,
 	                           const GateStatus status) {
 		if (status == GateStatus::GATE_SET) {
 			// Inside gates, we compress prefixes that only have an inlined
 			// row ID as their child.
 			NodePtr row_id_node;
 			Leaf::New(row_id_node, row_id.GetRowId());
-			NodePtr::InsertChild(art, node, row_id[depth], row_id_node);
+			NodePtr::InsertChild(art, slot.Ref(), row_id[depth], row_id_node);
 			return;
 		}
 
@@ -395,22 +411,22 @@ private:
 
 		// Create and insert the inlined leaf.
 		Leaf::New(leaf_slot.Ref(), row_id.GetRowId());
-		NodePtr::InsertChild(art, node, key[depth], leaf);
+		NodePtr::InsertChild(art, slot.Ref(), key[depth], leaf);
 	}
 
-	static void InsertIntoPrefix(ART &art, reference<NodePtr> &node_ref, const ARTKey &key, const ARTKey &row_id,
-	                             const idx_t pos, const idx_t depth, const GateStatus status) {
+	static void InsertIntoPrefix(ART &art, SlotHandle &slot, const ARTKey &key, const ARTKey &row_id, const idx_t pos,
+	                             const idx_t depth, const GateStatus status) {
 		const auto cast_pos = UnsafeNumericCast<uint8_t>(pos);
-		const auto byte = Prefix::GetByte(art, node_ref, cast_pos);
+		const auto byte = Prefix::GetByte(art, slot.Ref(), cast_pos);
 
 		NodePtr child;
-		const auto split_status = Prefix::Split(art, node_ref, child, cast_pos);
+		const auto split_status = PrefixHandle::Split(art, slot, child, cast_pos);
 
-		Node4::New(art, node_ref);
-		node_ref.get().SetGateStatus(split_status);
+		Node4::New(art, slot.Ref());
+		slot.Ref().SetGateStatus(split_status);
 
-		Node4::InsertChild(art, node_ref, byte, child);
-		InsertIntoNode(art, node_ref, key, row_id, depth, status);
+		Node4::InsertChild(art, slot.Ref(), byte, child);
+		InsertIntoNode(art, slot, key, row_id, depth, status);
 	}
 };
 

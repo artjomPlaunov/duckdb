@@ -151,6 +151,9 @@ public:
 	OptionalNodePtr GetChildNode(const ART &art, const uint8_t byte) const;
 	//! Get the first child node >= byte, if it exists, and update byte.
 	OptionalNodePtr GetNextChildNode(const ART &art, uint8_t &byte) const;
+	//! Get the child slot at byte. The slot is valid while handle remains valid.
+	static optional_ptr<NodePtr> GetChildSlotFromHandle(NodeHandle &handle, const uint8_t byte,
+	                                                    const bool unsafe = false);
 	//! Get the immutable child at byte.
 	const unsafe_optional_ptr<NodePtr> GetChild(ART &art, const uint8_t byte) const;
 	//! Get the child at byte.

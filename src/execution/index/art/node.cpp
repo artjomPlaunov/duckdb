@@ -252,6 +252,28 @@ OptionalNodePtr NodePtr::GetChildNode(const ART &art, const uint8_t byte) const 
 	}
 }
 
+static optional_ptr<NodePtr> ToChildSlot(unsafe_optional_ptr<NodePtr> child) {
+	if (!child) {
+		return nullptr;
+	}
+	return *child;
+}
+
+optional_ptr<NodePtr> NodePtr::GetChildSlotFromHandle(NodeHandle &handle, const uint8_t byte, const bool unsafe) {
+	switch (handle.GetType()) {
+	case NType::NODE_4:
+		return ToChildSlot(Node4::GetChild(handle.Get<Node4>(), byte, unsafe));
+	case NType::NODE_16:
+		return ToChildSlot(Node16::GetChild(handle.Get<Node16>(), byte, unsafe));
+	case NType::NODE_48:
+		return ToChildSlot(Node48::GetChild(handle.Get<Node48>(), byte, unsafe));
+	case NType::NODE_256:
+		return ToChildSlot(Node256::GetChild(handle.Get<Node256>(), byte, unsafe));
+	default:
+		throw InternalException("Invalid node type for GetChildSlotFromHandle: %d.", handle.GetType());
+	}
+}
+
 OptionalNodePtr NodePtr::GetNextChildNode(const ART &art, uint8_t &byte) const {
 	D_ASSERT(HasMetadata());
 	auto type = GetType();
