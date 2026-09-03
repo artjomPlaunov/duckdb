@@ -45,6 +45,9 @@ public:
 	//! Merge two inlined leaf nodes.
 	static void MergeInlined(ArenaAllocator &arena, ART &art, NodePtr &left, NodePtr &right, GateStatus status,
 	                         idx_t depth);
+	//! Merge two inlined leaf nodes while keeping the slot containing left valid.
+	static void MergeInlined(ArenaAllocator &arena, ART &art, SlotHandle &left, NodePtr &right, GateStatus status,
+	                         idx_t depth);
 
 	//! Transforms a deprecated leaf to a nested leaf.
 	static void TransformToNested(ART &art, NodePtr &node);

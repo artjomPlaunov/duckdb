@@ -8,6 +8,7 @@
 #include "duckdb/execution/index/art/iterator.hpp"
 #include "duckdb/execution/index/art/node.hpp"
 #include "duckdb/execution/index/art/prefix.hpp"
+#include "duckdb/execution/index/art/prefix_handle.hpp"
 #include "duckdb/execution/index/art/art_operator.hpp"
 
 namespace duckdb {
@@ -75,6 +76,54 @@ void Leaf::MergeInlined(ArenaAllocator &arena, ART &art, NodePtr &left, NodePtr 
 	Node4::InsertChild(art, left_ref, right_byte, right_child);
 
 	left.SetGateStatus(status);
+}
+
+void Leaf::MergeInlined(ArenaAllocator &arena, ART &art, SlotHandle &left, NodePtr &right, GateStatus status,
+                        idx_t depth) {
+	D_ASSERT(left.Ref().GetType() == NType::LEAF_INLINED);
+	D_ASSERT(right.GetType() == NType::LEAF_INLINED);
+
+	status = status == GateStatus::GATE_NOT_SET ? GateStatus::GATE_SET : GateStatus::GATE_NOT_SET;
+	if (status == GateStatus::GATE_SET) {
+		depth = 0;
+	}
+
+	const auto left_row_id = left.Ref().GetRowId();
+	const auto right_row_id = right.GetRowId();
+	const auto left_key = ARTKey::CreateARTKey<row_t>(arena, left_row_id);
+	const auto right_key = ARTKey::CreateARTKey<row_t>(arena, right_row_id);
+	const auto pos = left_key.GetMismatchPos(right_key, depth);
+
+	NodePtr replacement;
+	SlotHandle replacement_slot(replacement);
+	if (pos != depth) {
+		PrefixHandle::New(art, replacement_slot, left_key, depth, pos - depth);
+	}
+
+	const auto left_byte = left_key.data[pos];
+	const auto right_byte = right_key.data[pos];
+
+	if (pos == Prefix::ROW_ID_COUNT) {
+		Node7Leaf::New(art, replacement_slot.Ref());
+		Node7Leaf::InsertByte(art, replacement_slot.Ref(), left_byte);
+		Node7Leaf::InsertByte(art, replacement_slot.Ref(), right_byte);
+		replacement.SetGateStatus(status);
+		left.Ref() = replacement;
+		return;
+	}
+
+	Node4::New(art, replacement_slot.Ref());
+
+	NodePtr left_child;
+	Leaf::New(left_child, left_row_id);
+	Node4::InsertChild(art, replacement_slot.Ref(), left_byte, left_child);
+
+	NodePtr right_child;
+	Leaf::New(right_child, right_row_id);
+	Node4::InsertChild(art, replacement_slot.Ref(), right_byte, right_child);
+
+	replacement.SetGateStatus(status);
+	left.Ref() = replacement;
 }
 
 void Leaf::TransformToNested(ART &art, NodePtr &node) {
