@@ -265,6 +265,13 @@ AddColumnEntry PEGTransformerFactory::TransformAddColumnEntry(
 					throw ParserException("Cannot define a default value twice");
 				}
 				new_column.default_value = std::move(constraint.expression);
+			} else if ((constraint.constraint_name == "NotNullConstraint" &&
+			            constraint.constraint_type_info.type == ConstraintType::NOT_NULL) ||
+			           constraint.constraint_name == "UniqueConstraint" ||
+			           constraint.constraint_name == "PrimaryKeyConstraint" ||
+			           constraint.constraint_name == "CheckConstraint" ||
+			           constraint.constraint_name == "ForeignKeyConstraint") {
+				throw ParserException("Adding columns with constraints not yet supported");
 			}
 		}
 	}
