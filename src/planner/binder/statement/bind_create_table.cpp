@@ -170,6 +170,10 @@ unique_ptr<BoundConstraint> BindCheckConstraint(Binder &binder, const Constraint
 unique_ptr<BoundConstraint> Binder::BindUniqueConstraint(const Constraint &constraint, const Identifier &table,
                                                          const ColumnList &columns) {
 	auto &unique = constraint.Cast<UniqueConstraint>();
+	if (unique.IsDeferred()) {
+		throw NotImplementedException("Deferred %s constraints are not implemented yet",
+		                              unique.IsPrimaryKey() ? "PRIMARY KEY" : "UNIQUE");
+	}
 
 	// Resolve the columns.
 	vector<PhysicalIndex> indexes;

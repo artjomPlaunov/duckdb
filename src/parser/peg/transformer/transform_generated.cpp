@@ -3074,14 +3074,34 @@ PEGTransformerFactory::TransformNotNullColumnConstraintInternal(PEGTransformer &
 
 unique_ptr<TransformResultValue> PEGTransformerFactory::TransformUniqueConstraintInternal(PEGTransformer &transformer,
                                                                                           ParseResult &parse_result) {
-	auto result = TransformUniqueConstraint(transformer);
+	auto &list_pr = parse_result.Cast<ListParseResult>();
+	optional<bool> deferred_constraint {};
+	auto &deferred_constraint_opt = list_pr.GetChild(1).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		auto deferred_constraint_value = transformer.Transform<bool>(deferred_constraint_opt.GetResult());
+		deferred_constraint = deferred_constraint_value;
+	}
+	auto result = TransformUniqueConstraint(transformer, deferred_constraint);
 	return make_uniq<TypedTransformResult<ColumnConstraintEntry>>(std::move(result));
 }
 
 unique_ptr<TransformResultValue>
 PEGTransformerFactory::TransformPrimaryKeyConstraintInternal(PEGTransformer &transformer, ParseResult &parse_result) {
-	auto result = TransformPrimaryKeyConstraint(transformer);
+	auto &list_pr = parse_result.Cast<ListParseResult>();
+	optional<bool> deferred_constraint {};
+	auto &deferred_constraint_opt = list_pr.GetChild(2).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		auto deferred_constraint_value = transformer.Transform<bool>(deferred_constraint_opt.GetResult());
+		deferred_constraint = deferred_constraint_value;
+	}
+	auto result = TransformPrimaryKeyConstraint(transformer, deferred_constraint);
 	return make_uniq<TypedTransformResult<ColumnConstraintEntry>>(std::move(result));
+}
+
+unique_ptr<TransformResultValue> PEGTransformerFactory::TransformDeferredConstraintInternal(PEGTransformer &transformer,
+                                                                                            ParseResult &parse_result) {
+	auto result = TransformDeferredConstraint(transformer);
+	return make_uniq<TypedTransformResult<bool>>(result);
 }
 
 unique_ptr<TransformResultValue> PEGTransformerFactory::TransformDefaultValueInternal(PEGTransformer &transformer,
@@ -3248,7 +3268,13 @@ PEGTransformerFactory::TransformTopPrimaryKeyConstraintInternal(PEGTransformer &
                                                                 ParseResult &parse_result) {
 	auto &list_pr = parse_result.Cast<ListParseResult>();
 	auto column_id_list = transformer.Transform<vector<string>>(list_pr.GetChild(2));
-	auto result = TransformTopPrimaryKeyConstraint(transformer, column_id_list);
+	optional<bool> deferred_constraint {};
+	auto &deferred_constraint_opt = list_pr.GetChild(3).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		auto deferred_constraint_value = transformer.Transform<bool>(deferred_constraint_opt.GetResult());
+		deferred_constraint = deferred_constraint_value;
+	}
+	auto result = TransformTopPrimaryKeyConstraint(transformer, column_id_list, deferred_constraint);
 	return make_uniq<TypedTransformResult<unique_ptr<Constraint>>>(std::move(result));
 }
 
@@ -3256,7 +3282,13 @@ unique_ptr<TransformResultValue>
 PEGTransformerFactory::TransformTopUniqueConstraintInternal(PEGTransformer &transformer, ParseResult &parse_result) {
 	auto &list_pr = parse_result.Cast<ListParseResult>();
 	auto column_id_list = transformer.Transform<vector<string>>(list_pr.GetChild(1));
-	auto result = TransformTopUniqueConstraint(transformer, column_id_list);
+	optional<bool> deferred_constraint {};
+	auto &deferred_constraint_opt = list_pr.GetChild(2).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		auto deferred_constraint_value = transformer.Transform<bool>(deferred_constraint_opt.GetResult());
+		deferred_constraint = deferred_constraint_value;
+	}
+	auto result = TransformTopUniqueConstraint(transformer, column_id_list, deferred_constraint);
 	return make_uniq<TypedTransformResult<unique_ptr<Constraint>>>(std::move(result));
 }
 
@@ -11264,6 +11296,7 @@ void PEGTransformerFactory::RegisterGenerated() {
 	    {"NotNullColumnConstraint", &PEGTransformerFactory::TransformNotNullColumnConstraintInternal},
 	    {"UniqueConstraint", &PEGTransformerFactory::TransformUniqueConstraintInternal},
 	    {"PrimaryKeyConstraint", &PEGTransformerFactory::TransformPrimaryKeyConstraintInternal},
+	    {"DeferredConstraint", &PEGTransformerFactory::TransformDeferredConstraintInternal},
 	    {"DefaultValue", &PEGTransformerFactory::TransformDefaultValueInternal},
 	    {"CheckConstraint", &PEGTransformerFactory::TransformCheckConstraintInternal},
 	    {"ForeignKeyConstraint", &PEGTransformerFactory::TransformForeignKeyConstraintInternal},

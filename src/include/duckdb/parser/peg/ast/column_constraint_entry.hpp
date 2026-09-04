@@ -7,15 +7,20 @@
 
 namespace duckdb {
 
+struct ColumnConstraintTypeInfo {
+	bool is_primary_key = false;
+	ConstraintType type = ConstraintType::INVALID;
+	bool is_deferred = false;
+};
+
 struct ColumnConstraintEntry {
 	string constraint_name;
-	pair<bool, ConstraintType> constraint_type_info;
+	ColumnConstraintTypeInfo constraint_type_info;
 	unique_ptr<ParsedExpression> expression;
 	unique_ptr<Constraint> constraint;
 	CompressionType compression_type;
 
-	ColumnConstraintEntry()
-	    : constraint_type_info(false, ConstraintType::INVALID), compression_type(CompressionType::COMPRESSION_AUTO) {
+	ColumnConstraintEntry() : compression_type(CompressionType::COMPRESSION_AUTO) {
 	}
 };
 

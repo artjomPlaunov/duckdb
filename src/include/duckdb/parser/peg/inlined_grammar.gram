@@ -999,8 +999,9 @@ ColumnConstraint <- NotNullConstraint / UniqueConstraint / PrimaryKeyConstraint 
 NotNullConstraint <- NullConstraint / NotNullColumnConstraint
 NullConstraint <- 'NULL'
 NotNullColumnConstraint <- 'NOT' 'NULL'
-UniqueConstraint <- 'UNIQUE'
-PrimaryKeyConstraint <- 'PRIMARY' 'KEY'
+UniqueConstraint <- 'UNIQUE' DeferredConstraint?
+PrimaryKeyConstraint <- 'PRIMARY' 'KEY' DeferredConstraint?
+DeferredConstraint <- 'DEFERRED'
 DefaultValue <- 'DEFAULT' ColumnDefaultExpr
 CheckConstraint <- 'CHECK' Parens(Expression)
 ForeignKeyConstraint <- 'REFERENCES' BaseTableName Parens(ColumnList)? KeyActions
@@ -1021,8 +1022,8 @@ TopLevelConstraint <- ConstraintNameClause? TopLevelConstraintList
 TopLevelConstraintList <- TopPrimaryKeyConstraint / TopCheckConstraint / TopUniqueConstraint / TopForeignKeyConstraint
 ConstraintNameClause <- 'CONSTRAINT' Identifier
 TopCheckConstraint <- CheckConstraint
-TopPrimaryKeyConstraint <- 'PRIMARY' 'KEY' ColumnIdList
-TopUniqueConstraint <- 'UNIQUE' ColumnIdList
+TopPrimaryKeyConstraint <- 'PRIMARY' 'KEY' ColumnIdList DeferredConstraint?
+TopUniqueConstraint <- 'UNIQUE' ColumnIdList DeferredConstraint?
 TopForeignKeyConstraint <- 'FOREIGN' 'KEY' ColumnIdList ForeignKeyConstraint
 ColumnIdList <- Parens(List(ColId))
 

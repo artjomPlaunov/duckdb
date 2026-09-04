@@ -846,6 +846,9 @@ static const TransformFrameOps UNIQUE_CONSTRAINT_OPS = {"UniqueConstraint",
 static const TransformFrameOps PRIMARY_KEY_CONSTRAINT_OPS = {
     "PrimaryKeyConstraint", &PEGTransformerFactory::InitializePrimaryKeyConstraintTrampoline,
     &PEGTransformerFactory::FinalizePrimaryKeyConstraintTrampoline};
+static const TransformFrameOps DEFERRED_CONSTRAINT_OPS = {
+    "DeferredConstraint", &PEGTransformerFactory::InitializeDeferredConstraintTrampoline,
+    &PEGTransformerFactory::FinalizeDeferredConstraintTrampoline};
 static const TransformFrameOps DEFAULT_VALUE_OPS = {"DefaultValue",
                                                     &PEGTransformerFactory::InitializeDefaultValueTrampoline,
                                                     &PEGTransformerFactory::FinalizeDefaultValueTrampoline};
@@ -3233,6 +3236,7 @@ const case_insensitive_map_t<const TransformFrameOps *> &PEGTransformerFactory::
 	    {"NotNullColumnConstraint", &NOT_NULL_COLUMN_CONSTRAINT_OPS},
 	    {"UniqueConstraint", &UNIQUE_CONSTRAINT_OPS},
 	    {"PrimaryKeyConstraint", &PRIMARY_KEY_CONSTRAINT_OPS},
+	    {"DeferredConstraint", &DEFERRED_CONSTRAINT_OPS},
 	    {"DefaultValue", &DEFAULT_VALUE_OPS},
 	    {"CheckConstraint", &CHECK_CONSTRAINT_OPS},
 	    {"ForeignKeyConstraint", &FOREIGN_KEY_CONSTRAINT_OPS},
@@ -10000,26 +10004,58 @@ PEGTransformerFactory::FinalizeNotNullColumnConstraintTrampoline(PEGTransformer 
 
 void PEGTransformerFactory::InitializeUniqueConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
                                                                  TransformStackFrame &frame) {
-	frame.ReserveChildSlots(0);
+	auto &list_pr = frame.parse_result.Cast<ListParseResult>();
+	frame.ReserveChildSlots(1);
+	auto &deferred_constraint_opt = list_pr.GetChild(1).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		stack.PushFrame(deferred_constraint_opt.GetResult(), DEFERRED_CONSTRAINT_OPS,
+		                TransformFrameResultTarget(frame.frame_index, 0));
+	}
 }
 
 unique_ptr<TransformResultValue> PEGTransformerFactory::FinalizeUniqueConstraintTrampoline(PEGTransformer &transformer,
                                                                                            TransformStack &stack,
                                                                                            TransformStackFrame &frame) {
-	auto result = TransformUniqueConstraint(transformer);
+	optional<bool> deferred_constraint {};
+	if (frame.child_results[0]) {
+		deferred_constraint = frame.TakeResult<bool>(0);
+	}
+	auto result = TransformUniqueConstraint(transformer, deferred_constraint);
 	return make_uniq<TypedTransformResult<ColumnConstraintEntry>>(std::move(result));
 }
 
 void PEGTransformerFactory::InitializePrimaryKeyConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
                                                                      TransformStackFrame &frame) {
-	frame.ReserveChildSlots(0);
+	auto &list_pr = frame.parse_result.Cast<ListParseResult>();
+	frame.ReserveChildSlots(1);
+	auto &deferred_constraint_opt = list_pr.GetChild(2).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		stack.PushFrame(deferred_constraint_opt.GetResult(), DEFERRED_CONSTRAINT_OPS,
+		                TransformFrameResultTarget(frame.frame_index, 0));
+	}
 }
 
 unique_ptr<TransformResultValue>
 PEGTransformerFactory::FinalizePrimaryKeyConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
                                                               TransformStackFrame &frame) {
-	auto result = TransformPrimaryKeyConstraint(transformer);
+	optional<bool> deferred_constraint {};
+	if (frame.child_results[0]) {
+		deferred_constraint = frame.TakeResult<bool>(0);
+	}
+	auto result = TransformPrimaryKeyConstraint(transformer, deferred_constraint);
 	return make_uniq<TypedTransformResult<ColumnConstraintEntry>>(std::move(result));
+}
+
+void PEGTransformerFactory::InitializeDeferredConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
+                                                                   TransformStackFrame &frame) {
+	frame.ReserveChildSlots(0);
+}
+
+unique_ptr<TransformResultValue>
+PEGTransformerFactory::FinalizeDeferredConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
+                                                            TransformStackFrame &frame) {
+	auto result = TransformDeferredConstraint(transformer);
+	return make_uniq<TypedTransformResult<bool>>(result);
 }
 
 void PEGTransformerFactory::InitializeDefaultValueTrampoline(PEGTransformer &transformer, TransformStack &stack,
@@ -10333,7 +10369,12 @@ void PEGTransformerFactory::InitializeTopPrimaryKeyConstraintTrampoline(PEGTrans
                                                                         TransformStack &stack,
                                                                         TransformStackFrame &frame) {
 	auto &list_pr = frame.parse_result.Cast<ListParseResult>();
-	frame.ReserveChildSlots(1);
+	frame.ReserveChildSlots(2);
+	auto &deferred_constraint_opt = list_pr.GetChild(3).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		stack.PushFrame(deferred_constraint_opt.GetResult(), DEFERRED_CONSTRAINT_OPS,
+		                TransformFrameResultTarget(frame.frame_index, 1));
+	}
 	stack.PushFrame(list_pr.GetChild(2), COLUMN_ID_LIST_OPS, TransformFrameResultTarget(frame.frame_index, 0));
 }
 
@@ -10341,14 +10382,23 @@ unique_ptr<TransformResultValue>
 PEGTransformerFactory::FinalizeTopPrimaryKeyConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
                                                                  TransformStackFrame &frame) {
 	auto column_id_list = frame.TakeResult<vector<string>>(0);
-	auto result = TransformTopPrimaryKeyConstraint(transformer, column_id_list);
+	optional<bool> deferred_constraint {};
+	if (frame.child_results[1]) {
+		deferred_constraint = frame.TakeResult<bool>(1);
+	}
+	auto result = TransformTopPrimaryKeyConstraint(transformer, column_id_list, deferred_constraint);
 	return make_uniq<TypedTransformResult<unique_ptr<Constraint>>>(std::move(result));
 }
 
 void PEGTransformerFactory::InitializeTopUniqueConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
                                                                     TransformStackFrame &frame) {
 	auto &list_pr = frame.parse_result.Cast<ListParseResult>();
-	frame.ReserveChildSlots(1);
+	frame.ReserveChildSlots(2);
+	auto &deferred_constraint_opt = list_pr.GetChild(2).Cast<OptionalParseResult>();
+	if (deferred_constraint_opt.HasResult()) {
+		stack.PushFrame(deferred_constraint_opt.GetResult(), DEFERRED_CONSTRAINT_OPS,
+		                TransformFrameResultTarget(frame.frame_index, 1));
+	}
 	stack.PushFrame(list_pr.GetChild(1), COLUMN_ID_LIST_OPS, TransformFrameResultTarget(frame.frame_index, 0));
 }
 
@@ -10356,7 +10406,11 @@ unique_ptr<TransformResultValue>
 PEGTransformerFactory::FinalizeTopUniqueConstraintTrampoline(PEGTransformer &transformer, TransformStack &stack,
                                                              TransformStackFrame &frame) {
 	auto column_id_list = frame.TakeResult<vector<string>>(0);
-	auto result = TransformTopUniqueConstraint(transformer, column_id_list);
+	optional<bool> deferred_constraint {};
+	if (frame.child_results[1]) {
+		deferred_constraint = frame.TakeResult<bool>(1);
+	}
+	auto result = TransformTopUniqueConstraint(transformer, column_id_list, deferred_constraint);
 	return make_uniq<TypedTransformResult<unique_ptr<Constraint>>>(std::move(result));
 }
 

@@ -1126,6 +1126,7 @@ Bool:
     - NotNullColumnConstraint
     - PreserveRows
     - DeleteRows
+    - DeferredConstraint
     - DistinctOrAll
     - DistinctKeyword
     - AllKeyword

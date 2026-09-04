@@ -20,8 +20,12 @@ public:
 
 public:
 	DUCKDB_API UniqueConstraint(const LogicalIndex index, const bool is_primary_key);
+	DUCKDB_API UniqueConstraint(const LogicalIndex index, const bool is_primary_key, const bool is_deferred);
 	DUCKDB_API UniqueConstraint(const LogicalIndex index, Identifier column_name, const bool is_primary_key);
+	DUCKDB_API UniqueConstraint(const LogicalIndex index, Identifier column_name, const bool is_primary_key,
+	                            const bool is_deferred);
 	DUCKDB_API UniqueConstraint(vector<Identifier> columns, const bool is_primary_key);
+	DUCKDB_API UniqueConstraint(vector<Identifier> columns, const bool is_primary_key, const bool is_deferred);
 
 public:
 	DUCKDB_API string ToString() const override;
@@ -31,6 +35,8 @@ public:
 
 	//! Returns true, if the constraint is a PRIMARY KEY constraint.
 	bool IsPrimaryKey() const;
+	//! Returns true if the constraint was declared with the DEFERRED modifier.
+	bool IsDeferred() const;
 	//! Returns true, if the constraint is defined on a single column.
 	bool HasIndex() const;
 	//! Returns the column index on which the constraint is defined.
@@ -61,6 +67,8 @@ public:
 	vector<Identifier> columns;
 	//! Whether this is a PRIMARY KEY constraint, or a UNIQUE constraint.
 	bool is_primary_key;
+	//! Whether the constraint was declared with the DEFERRED modifier.
+	bool is_deferred;
 };
 
 } // namespace duckdb
