@@ -55,6 +55,7 @@ private:
 //! NodePtrHandle owns the pin for the node containing a mutable NodePtr storage location.
 class NodePtrHandle {
 	friend class PrefixHandle;
+	friend class NodePtr;
 
 public:
 	NodePtrHandle(const NodePtrHandle &) = delete;

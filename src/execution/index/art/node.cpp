@@ -252,6 +252,32 @@ OptionalNodePtr NodePtr::GetChildNode(const ART &art, const uint8_t byte) const 
 	}
 }
 
+optional<NodePtrHandle> NodePtr::GetChildHandle(ART &art, const uint8_t byte) const {
+	D_ASSERT(HasMetadata());
+	NodeHandle handle(art, *this);
+	unsafe_optional_ptr<NodePtr> child;
+	switch (handle.GetType()) {
+	case NType::NODE_4:
+		child = Node4::GetChild(handle.Get<Node4>(), byte);
+		break;
+	case NType::NODE_16:
+		child = Node16::GetChild(handle.Get<Node16>(), byte);
+		break;
+	case NType::NODE_48:
+		child = Node48::GetChild(handle.Get<Node48>(), byte);
+		break;
+	case NType::NODE_256:
+		child = Node256::GetChild(handle.Get<Node256>(), byte);
+		break;
+	default:
+		throw InternalException("Invalid node type for GetChildHandle: %d.", handle.GetType());
+	}
+	if (!child) {
+		return nullopt;
+	}
+	return NodePtrHandle(*child, std::move(handle));
+}
+
 OptionalNodePtr NodePtr::GetNextChildNode(const ART &art, uint8_t &byte) const {
 	D_ASSERT(HasMetadata());
 	auto type = GetType();

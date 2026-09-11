@@ -11,6 +11,7 @@
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/common/optional.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/unique_ptr.hpp"
 #include "duckdb/execution/index/fixed_size_allocator.hpp"
@@ -149,6 +150,8 @@ public:
 
 	//! Get the child node at byte, if it exists.
 	OptionalNodePtr GetChildNode(const ART &art, const uint8_t byte) const;
+	//! Get the child at byte with a pin on its containing node, if it exists.
+	optional<NodePtrHandle> GetChildHandle(ART &art, const uint8_t byte) const;
 	//! Get the first child node >= byte, if it exists, and update byte.
 	OptionalNodePtr GetNextChildNode(const ART &art, uint8_t &byte) const;
 	//! Get the immutable child at byte.
