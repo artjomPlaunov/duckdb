@@ -11,6 +11,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/error_manager.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/planner/expression_binder/constant_binder.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -114,6 +115,19 @@ void BaseAppender::AppendDecimalValueInternal(Vector &col, SRC input) {
 }
 
 template <class T>
+static string_t AppenderStringCast(T input, StringHeap &heap) {
+	return StringCast::Operation<T>(input, heap);
+}
+
+template <>
+string_t AppenderStringCast(string_t input, StringHeap &heap) {
+	if (!Value::StringIsValid(input.GetData(), input.GetSize())) {
+		throw ErrorManager::InvalidUnicodeError(input.GetString(), "appender");
+	}
+	return StringCast::Operation<string_t>(input, heap);
+}
+
+template <class T>
 void BaseAppender::AppendValueInternal(T input) {
 	if (column >= GetActiveTypes().size()) {
 		throw InvalidInputException("Too many appends for chunk!");
@@ -198,7 +212,7 @@ void BaseAppender::AppendValueInternal(T input) {
 		break;
 	case LogicalTypeId::VARCHAR:
 		FlatVector::GetDataMutable<string_t>(col)[chunk.size()] =
-		    StringCast::Operation<T>(input, StringVector::GetStringHeap(col));
+		    AppenderStringCast<T>(input, StringVector::GetStringHeap(col));
 		break;
 	default:
 		AppendValue(Value::CreateValue<T>(input));

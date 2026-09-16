@@ -56,6 +56,34 @@ void AssertDecimalValueMatches(duckdb::unique_ptr<CAPIResult> &result, duckdb_de
 	REQUIRE(actual.value.upper == expected.value.upper);
 }
 
+TEST_CASE("Test C API appender rejects invalid UTF-8", "[capi]") {
+	CAPITester tester;
+	REQUIRE(tester.OpenDatabase(nullptr));
+	tester.Query("CREATE TABLE strings(s VARCHAR, b BLOB)");
+	CAPIAppender appender(tester, nullptr, "strings");
+	const char invalid[] = {'c', 'a', 'f', char(0xE9)};
+
+	REQUIRE(duckdb_append_varchar(appender, "\xC3\xA9") == DuckDBSuccess);
+	REQUIRE(duckdb_append_blob(appender, invalid, sizeof(invalid)) == DuckDBSuccess);
+	REQUIRE(duckdb_appender_end_row(appender) == DuckDBSuccess);
+
+	SECTION("Null terminated") {
+		REQUIRE(duckdb_append_varchar(appender, "caf\xE9") == DuckDBError);
+	}
+	SECTION("Explicit length") {
+		REQUIRE(duckdb_append_varchar_length(appender, invalid, sizeof(invalid)) == DuckDBError);
+	}
+	TestAppenderError(appender.appender, DUCKDB_ERROR_INVALID_INPUT, "Invalid unicode");
+	REQUIRE(duckdb_append_varchar(appender, "replacement") == DuckDBSuccess);
+	REQUIRE(duckdb_append_blob(appender, invalid, sizeof(invalid)) == DuckDBSuccess);
+	REQUIRE(duckdb_appender_end_row(appender) == DuckDBSuccess);
+	REQUIRE(duckdb_appender_flush(appender) == DuckDBSuccess);
+
+	auto result = tester.Query("SELECT count(*), min(hex(b)) FROM strings");
+	REQUIRE(result->Fetch<int64_t>(0, 0) == 2);
+	REQUIRE(result->Fetch<string>(1, 0) == "636166E9");
+}
+
 template <class TYPE, duckdb_state APPEND_FUNC(duckdb_appender, TYPE)>
 void TestAppendingSingleDecimalValue(TYPE value, duckdb_decimal expected, uint8_t width, uint8_t scale) {
 	// Set the width and scale of the expected value

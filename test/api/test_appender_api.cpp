@@ -239,6 +239,43 @@ TEST_CASE("Test using multiple appenders", "[api]") {
 	REQUIRE(CHECK_COLUMN(result, 0, {}));
 }
 
+TEST_CASE("Test appender rejects invalid UTF-8 after a Unicode string", "[api]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE strings(s VARCHAR)"));
+
+	const char unicode[] = {char(0xC3), char(0xA9)};
+	const char invalid[] = {'c', 'a', 'f', char(0xE9)};
+	Appender appender(con, "strings");
+	appender.BeginRow();
+	appender.Append(unicode, sizeof(unicode));
+	appender.EndRow();
+	appender.BeginRow();
+	SECTION("Explicit length") {
+		REQUIRE_THROWS_WITH(appender.Append(invalid, sizeof(invalid)), Catch::Contains("Invalid unicode"));
+	}
+	SECTION("Null terminated") {
+		REQUIRE_THROWS_WITH(appender.Append("caf\xE9"), Catch::Contains("Invalid unicode"));
+	}
+	SECTION("String reference") {
+		REQUIRE_THROWS_WITH(appender.Append(string_t(invalid, sizeof(invalid))), Catch::Contains("Invalid unicode"));
+	}
+	SECTION("Invalid bytes after embedded NUL") {
+		const char embedded_invalid[] = {'a', '\0', char(0xE9)};
+		REQUIRE_THROWS_WITH(appender.Append(embedded_invalid, sizeof(embedded_invalid)),
+		                    Catch::Contains("Invalid unicode"));
+	}
+	const char replacement[] = {'a', '\0', 'b'};
+	appender.Append(replacement, sizeof(replacement));
+	appender.EndRow();
+
+	REQUIRE_NOTHROW(appender.Close());
+	auto result = con.Query("SELECT count(*) FROM strings");
+	REQUIRE(CHECK_COLUMN(result, 0, {2}));
+	result = con.Query("SELECT hex(encode(s)) FROM strings ORDER BY 1");
+	REQUIRE(CHECK_COLUMN(result, 0, {"610062", "C3A9"}));
+}
+
 TEST_CASE("Test usage of appender interleaved with connection usage", "[api]") {
 	DuckDB db(nullptr);
 	Connection con(db);
