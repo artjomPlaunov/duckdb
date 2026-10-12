@@ -38,6 +38,8 @@ enum class ARTScanNodeResult : uint8_t;
 
 enum class ARTScanResult : uint8_t;
 
+enum class ARTSerializationFormat : uint8_t;
+
 enum class AccessMode : uint8_t;
 
 enum class AdaptiveFilterSource : uint8_t;
@@ -303,6 +305,8 @@ enum class IdentifierCaseMode : uint8_t;
 enum class IndexAppendMode : uint8_t;
 
 enum class IndexBindState : uint8_t;
+
+enum class IndexCheckpointMode : uint8_t;
 
 enum class IndexConstraintType : uint8_t;
 
@@ -679,6 +683,9 @@ const char* EnumUtil::ToChars<ARTScanNodeResult>(ARTScanNodeResult value);
 
 template<>
 const char* EnumUtil::ToChars<ARTScanResult>(ARTScanResult value);
+
+template<>
+const char* EnumUtil::ToChars<ARTSerializationFormat>(ARTSerializationFormat value);
 
 template<>
 const char* EnumUtil::ToChars<AccessMode>(AccessMode value);
@@ -1078,6 +1085,9 @@ const char* EnumUtil::ToChars<IndexAppendMode>(IndexAppendMode value);
 
 template<>
 const char* EnumUtil::ToChars<IndexBindState>(IndexBindState value);
+
+template<>
+const char* EnumUtil::ToChars<IndexCheckpointMode>(IndexCheckpointMode value);
 
 template<>
 const char* EnumUtil::ToChars<IndexConstraintType>(IndexConstraintType value);
@@ -1639,6 +1649,9 @@ template<>
 ARTScanResult EnumUtil::FromString<ARTScanResult>(const char *value);
 
 template<>
+ARTSerializationFormat EnumUtil::FromString<ARTSerializationFormat>(const char *value);
+
+template<>
 AccessMode EnumUtil::FromString<AccessMode>(const char *value);
 
 template<>
@@ -2036,6 +2049,9 @@ IndexAppendMode EnumUtil::FromString<IndexAppendMode>(const char *value);
 
 template<>
 IndexBindState EnumUtil::FromString<IndexBindState>(const char *value);
+
+template<>
+IndexCheckpointMode EnumUtil::FromString<IndexCheckpointMode>(const char *value);
 
 template<>
 IndexConstraintType EnumUtil::FromString<IndexConstraintType>(const char *value);
