@@ -169,8 +169,9 @@ public:
 	//! Insert a child at byte.
 	static void InsertChild(ART &art, NodePtr &node_ptr, const uint8_t byte, const NodePtr child_ptr);
 	//! Delete the child at byte.
+	//! slot_handle pins the node containing node_ptr; it is released before any operation that frees that node.
 	static void DeleteChild(ART &art, NodePtr &node_ptr, NodePtr &parent_ptr, const uint8_t byte,
-	                        const GateStatus status);
+	                        const GateStatus status, optional<NodeHandle> slot_handle);
 
 private:
 	static void ShrinkNode16(ART &art, NodePtr &node4_ptr, NodePtr &node16_ptr);

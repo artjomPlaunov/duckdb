@@ -31,7 +31,6 @@ public:
 public:
 	Prefix() = delete;
 	Prefix(const ART &art, const NodePtr node_ptr, const bool is_mutable = false, const bool set_in_memory = false);
-	Prefix(FixedSizeAllocator &allocator, const NodePtr node_ptr, const idx_t count);
 
 	data_ptr_t data;
 	NodePtr *child_slot;
@@ -45,8 +44,9 @@ public:
 	static void New(ART &art, reference<NodePtr> &node_ptr_ref, const ARTKey &key, const idx_t depth, idx_t count);
 
 	//! Concatenates parent -> prev_node4 -> child.
+	//! node4_slot_handle pins the node containing node4_ptr; it is released before freeing that node.
 	static void Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
-	                   const GateStatus node4_status, const GateStatus status);
+	                   const GateStatus node4_status, const GateStatus status, optional<NodeHandle> node4_slot_handle);
 
 	//! Removes up to pos bytes from the prefix.
 	//! Shifts all subsequent bytes by pos. Frees empty nodes.
@@ -57,13 +57,9 @@ private:
 	                          const idx_t offset);
 
 	static void ConcatInternal(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
-	                           const GateStatus status);
+	                           const GateStatus status, optional<NodeHandle> node4_slot_handle);
 	static void ConcatNode4WasGate(ART &art, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte);
 	static void ConcatChildIsGate(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr,
 	                              uint8_t byte);
-
-	Prefix Append(ART &art, const uint8_t byte);
-	void Append(ART &art, NodePtr other_ptr);
-	Prefix TransformToDeprecatedAppend(ART &art, FixedSizeAllocator &allocator, uint8_t byte);
 };
 } // namespace duckdb

@@ -27,12 +27,6 @@ Prefix::Prefix(const ART &art, const NodePtr node_ptr, const bool is_mutable, co
 	in_memory = true;
 }
 
-Prefix::Prefix(FixedSizeAllocator &allocator, const NodePtr node_ptr, const idx_t count) {
-	data = allocator.Get(node_ptr, true);
-	child_slot = &PrefixHandle::ChildRefWithCount(data, count);
-	in_memory = true;
-}
-
 uint8_t Prefix::GetByte(const ART &art, const NodePtr &node_ptr, const uint8_t pos) {
 	D_ASSERT(node_ptr.GetType() == PREFIX);
 	ConstPrefixHandle prefix(art, node_ptr);
@@ -69,7 +63,7 @@ void Prefix::New(ART &art, reference<NodePtr> &node_ptr_ref, const ARTKey &key, 
 }
 
 void Prefix::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
-                    const GateStatus node4_status, const GateStatus status) {
+                    const GateStatus node4_status, const GateStatus status, optional<NodeHandle> node4_slot_handle) {
 	// We have four situations from which we enter here:
 	// 1: PREFIX (parent) - Node4 (prev_node4) - PREFIX (child) - INLINED_LEAF, or
 	// 2: PREFIX (parent) - Node4 (prev_node4) - INLINED_LEAF (child), or
@@ -93,7 +87,7 @@ void Prefix::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const Nod
 		ConcatChildIsGate(art, parent_ptr, node4_ptr, child_ptr, byte);
 		return;
 	}
-	ConcatInternal(art, parent_ptr, node4_ptr, child_ptr, byte, status);
+	ConcatInternal(art, parent_ptr, node4_ptr, child_ptr, byte, status, std::move(node4_slot_handle));
 }
 
 void Prefix::Reduce(ART &art, NodePtr &node_ptr, const idx_t pos) {
@@ -104,62 +98,40 @@ void Prefix::Reduce(ART &art, NodePtr &node_ptr, const idx_t pos) {
 	// thus, if the prefix was a gate, it no longer is.
 	node_ptr.SetGateStatus(GateStatus::GATE_NOT_SET);
 
-	Prefix prefix(art, node_ptr);
-	if (pos == idx_t(prefix.data[art.PrefixCount()] - 1)) {
-		auto next_ptr = *prefix.child_slot;
-		NodePtr::FreeNode(art, node_ptr);
-		node_ptr = next_ptr;
-		return;
-	}
+	NodePtr child_ptr;
+	{
+		PrefixHandle prefix(NodeHandle(art, node_ptr));
+		const idx_t count = prefix.GetCount(art);
+		if (pos + 1 != count) {
+			// FIXME: Copy into new prefix (chain) instead of shifting.
+			for (idx_t i = 0; i < count - pos - 1; i++) {
+				prefix.SetByte(i, prefix.GetByte(pos + i + 1));
+			}
+			prefix.SetCount(art, UnsafeNumericCast<uint8_t>(count - pos - 1));
 
-	// FIXME: Copy into new prefix (chain) instead of shifting.
-	for (idx_t i = 0; i < art.PrefixCount() - pos - 1; i++) {
-		prefix.data[i] = prefix.data[pos + i + 1];
-	}
-
-	prefix.data[art.PrefixCount()] -= pos + 1;
-	prefix.Append(art, *prefix.child_slot);
-}
-
-Prefix Prefix::Append(ART &art, const uint8_t byte) {
-	if (data[art.PrefixCount()] != art.PrefixCount()) {
-		data[data[art.PrefixCount()]] = byte;
-		data[art.PrefixCount()]++;
-		return *this;
-	}
-
-	auto prefix = NewInternal(art, *child_slot, nullptr, 0, 0);
-	return prefix.Append(art, byte);
-}
-
-void Prefix::Append(ART &art, NodePtr other_ptr) {
-	D_ASSERT(other_ptr.HasMetadata());
-
-	Prefix prefix = *this;
-	while (other_ptr.GetType() == PREFIX) {
-		if (other_ptr.GetGateStatus() == GateStatus::GATE_SET) {
-			*prefix.child_slot = other_ptr;
+			// Merge any subsequent prefix nodes into this prefix.
+			auto next_ptr = prefix.Child(art);
+			PrefixHandle::Append(art, std::move(prefix), next_ptr);
 			return;
 		}
-
-		Prefix other_prefix(art, other_ptr, true);
-		for (idx_t i = 0; i < other_prefix.data[art.PrefixCount()]; i++) {
-			prefix = prefix.Append(art, other_prefix.data[i]);
-		}
-
-		*prefix.child_slot = *other_prefix.child_slot;
-		NodePtr::FreeNode(art, other_ptr);
-		other_ptr = *prefix.child_slot;
+		child_ptr = prefix.Child(art);
 	}
+
+	// All bytes of this prefix are removed.
+	// Release the handle before freeing the node, which may destroy the allocator buffer.
+	NodePtr::FreeNode(art, node_ptr);
+	node_ptr = child_ptr;
 }
 
 void Prefix::ConcatInternal(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
-                            const GateStatus status) {
+                            const GateStatus status, optional<NodeHandle> node4_slot_handle) {
 	if (child_ptr.GetType() == NType::LEAF_INLINED) {
 		if (status == GateStatus::GATE_SET) {
 			if (parent_ptr.GetType() == NType::PREFIX) {
 				// The parent only contained the Node4, so we can now inline 'all the way up',
 				// and the gate is no longer nested.
+				// The freed chain contains the Node4's slot: release its pin first.
+				node4_slot_handle.reset();
 				while (parent_ptr.GetType() == NType::PREFIX) {
 					NodePtr next_ptr;
 					{
@@ -261,19 +233,6 @@ void Prefix::ConcatChildIsGate(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr
 	auto tail = PrefixHandle::GetTail(art, parent_ptr);
 	tail = PrefixHandle::AppendByte(art, std::move(tail), byte);
 	tail.Child(art) = child_ptr;
-}
-
-Prefix Prefix::TransformToDeprecatedAppend(ART &art, FixedSizeAllocator &allocator, uint8_t byte) {
-	if (data[DEPRECATED_COUNT] != DEPRECATED_COUNT) {
-		data[data[DEPRECATED_COUNT]] = byte;
-		data[DEPRECATED_COUNT]++;
-		return *this;
-	}
-
-	*child_slot = allocator.New();
-	child_slot->SetMetadata(static_cast<uint8_t>(PREFIX));
-	Prefix prefix(allocator, *child_slot, DEPRECATED_COUNT);
-	return prefix.TransformToDeprecatedAppend(art, allocator, byte);
 }
 
 } // namespace duckdb

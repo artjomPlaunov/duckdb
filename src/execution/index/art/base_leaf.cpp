@@ -69,7 +69,8 @@ void Node7Leaf::InsertByte(ART &art, NodePtr &node_ptr, const uint8_t byte) {
 	Node15Leaf::InsertByte(art, node_ptr, byte);
 }
 
-void Node7Leaf::DeleteByte(ART &art, NodePtr &node_ptr, NodePtr &parent_ptr, const uint8_t byte, const ARTKey &row_id) {
+void Node7Leaf::DeleteByte(ART &art, NodePtr &node_ptr, NodePtr &parent_ptr, const uint8_t byte, const ARTKey &row_id,
+                           optional<NodeHandle> slot_handle) {
 	idx_t remainder;
 	{
 		auto n7_handle = DeleteByteInternal(art, node_ptr, byte);
@@ -88,6 +89,8 @@ void Node7Leaf::DeleteByte(ART &art, NodePtr &node_ptr, NodePtr &parent_ptr, con
 	}
 	// Free the prefix (nodes) and inline the remainder.
 	if (parent_ptr.GetType() == NType::PREFIX) {
+		// The freed prefix chain contains the node's slot: release its pin first.
+		slot_handle.reset();
 		NodePtr::FreeTree(art, parent_ptr);
 		Leaf::New(parent_ptr, UnsafeNumericCast<row_t>(remainder));
 		return;
