@@ -161,6 +161,7 @@ ARTScanProgress Iterator::Scan(const ARTKey &upper_bound, Output &output, bool e
 template ARTScanProgress Iterator::Scan<RowIdSetOutput>(const ARTKey &, RowIdSetOutput &, bool);
 template ARTScanProgress Iterator::Scan<RowIdVectorOutput>(const ARTKey &, RowIdVectorOutput &, bool);
 template ARTScanProgress Iterator::Scan<KeyRowIdOutput>(const ARTKey &, KeyRowIdOutput &, bool);
+template ARTScanProgress Iterator::Scan<UnexcludedRowIdOutput>(const ARTKey &, UnexcludedRowIdOutput &, bool);
 
 void Iterator::FindMinimum(NodePtr current_ptr) {
 	while (current_ptr.HasMetadata()) {

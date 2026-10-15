@@ -144,6 +144,26 @@ struct KeyRowIdOutput {
 	}
 };
 
+//! Output policy that searches for any row ID not contained in an exclusion set, pausing as soon as one is found.
+struct UnexcludedRowIdOutput {
+	const set<row_t> &excluded_row_ids;
+	bool found_unexcluded = false;
+
+	explicit UnexcludedRowIdOutput(const set<row_t> &excluded_row_ids) : excluded_row_ids(excluded_row_ids) {
+	}
+
+	bool TryAdd(const row_t rid) {
+		if (excluded_row_ids.find(rid) != excluded_row_ids.end()) {
+			return true;
+		}
+		found_unexcluded = true;
+		return false;
+	}
+	void SetKey(const IteratorKey &, const idx_t) {
+		// No-op: we don't need keys for row ID output.
+	}
+};
+
 //! Scanning state. The scanning output policies allow us to pass in a capacity while scanning, so that when the
 //! scan fills up the capacity, we can pause the scan state at that location, and resume scanning later.
 enum class ARTScanProgress : uint8_t { COMPLETED = 0, PAUSED = 1 };

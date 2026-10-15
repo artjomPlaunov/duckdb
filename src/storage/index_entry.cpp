@@ -405,7 +405,12 @@ void IndexEntry::VerifyForeignKey(const shared_ptr<IndexEntry> &delete_entry, Da
 	bound_index.VerifyConstraint(chunk, index_append_info, conflict_manager);
 	if (auto delta = deltas.Find(IndexDeltaType::ADDED_DATA_DURING_CHECKPOINT)) {
 		// if we have added any rows during checkpoint - check in that index as well
+		// removals during a checkpoint delete from ADDED directly, so only the
+		// transaction-local delete index applies as an exclusion set here
 		IndexAppendInfo added_during_checkpoint_info;
+		if (delete_entry) {
+			added_during_checkpoint_info.delete_indexes.push_back(delete_entry->owned_index->Cast<BoundIndex>());
+		}
 		delta->VerifyConstraint(chunk, added_during_checkpoint_info, conflict_manager);
 	}
 }
