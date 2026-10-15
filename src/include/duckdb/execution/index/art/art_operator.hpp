@@ -98,15 +98,17 @@ public:
 				return false;
 			}
 			case NType::PREFIX: {
-				Prefix prefix(art, current_ptr);
-				for (idx_t i = 0; i < prefix.data[art.PrefixCount()]; i++) {
-					if (prefix.data[i] != rowid[depth]) {
+				ConstNodeHandle handle(art, current_ptr);
+				auto data = handle.GetPtr();
+				NodePtr child_ptr = ConstPrefixHandle::ChildRef(art, handle);
+				for (idx_t i = 0; i < data[art.PrefixCount()]; i++) {
+					if (data[i] != rowid[depth]) {
 						// The key and the prefix don't match.
 						return false;
 					}
 					depth++;
 				}
-				current_ptr = *prefix.child_slot;
+				current_ptr = child_ptr;
 			}
 			}
 		}
