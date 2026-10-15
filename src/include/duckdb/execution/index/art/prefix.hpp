@@ -56,8 +56,6 @@ private:
 	static Prefix NewInternal(ART &art, NodePtr &node_ptr, const data_ptr_t data, const uint8_t count,
 	                          const idx_t offset);
 
-	static Prefix GetTail(ART &art, const NodePtr &node_ptr);
-
 	static void ConcatInternal(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
 	                           const GateStatus status);
 	static void ConcatNode4WasGate(ART &art, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte);

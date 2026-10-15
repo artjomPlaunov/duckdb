@@ -20,6 +20,8 @@ struct PrefixChain;
 
 //! PrefixHandle owns the pin for a mutable prefix node.
 class PrefixHandle {
+	friend class Prefix;
+
 public:
 	static constexpr NType PREFIX = NType::PREFIX;
 	static constexpr uint8_t DEPRECATED_COUNT = 15;
@@ -101,6 +103,9 @@ private:
 	                                const idx_t offset);
 	static PrefixHandle AppendByte(ART &art, PrefixHandle prefix, const uint8_t byte);
 	static void Append(ART &art, PrefixHandle prefix, NodePtr other_ptr);
+
+	//! Returns a handle to the tail of the prefix chain, pinning one link at a time.
+	static PrefixHandle GetTail(ART &art, const NodePtr node_ptr);
 
 	static NodeHandle TransformToDeprecatedAppend(NodeHandle tail_handle, ART &art, FixedSizeAllocator &allocator,
 	                                              const uint8_t byte);

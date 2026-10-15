@@ -78,6 +78,21 @@ void PrefixHandle::Append(ART &art, PrefixHandle prefix, NodePtr other_ptr) {
 	prefix.Child(art) = other_ptr;
 }
 
+PrefixHandle PrefixHandle::GetTail(ART &art, const NodePtr node_ptr) {
+	D_ASSERT(node_ptr.GetType() == PREFIX);
+
+	NodePtr current_ptr = node_ptr;
+	while (true) {
+		// The handle is released at the end of each iteration, before pinning the next link.
+		PrefixHandle prefix(NodeHandle(art, current_ptr));
+		NodePtr child_ptr = prefix.Child(art);
+		if (child_ptr.GetType() != PREFIX) {
+			return prefix;
+		}
+		current_ptr = child_ptr;
+	}
+}
+
 NodePtr PrefixHandle::Split(ART &art, NodePtr &prefix_ptr, NodePtr &branching_node4_ptr, const uint8_t pos) {
 	D_ASSERT(prefix_ptr.HasMetadata());
 	D_ASSERT(prefix_ptr.GetType() == PREFIX);

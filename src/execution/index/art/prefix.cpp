@@ -153,14 +153,6 @@ void Prefix::Append(ART &art, NodePtr other_ptr) {
 	}
 }
 
-Prefix Prefix::GetTail(ART &art, const NodePtr &node_ptr) {
-	Prefix prefix(art, node_ptr, true);
-	while (prefix.child_slot->GetType() == PREFIX) {
-		prefix = Prefix(art, *prefix.child_slot, true);
-	}
-	return prefix;
-}
-
 void Prefix::ConcatInternal(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
                             const GateStatus status) {
 	if (child_ptr.GetType() == NType::LEAF_INLINED) {
@@ -187,9 +179,9 @@ void Prefix::ConcatInternal(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, c
 		// Not inside a gate.
 		if (parent_ptr.GetType() == NType::PREFIX) {
 			// Append the byte to the prefix, and then inline the child.
-			auto tail = GetTail(art, parent_ptr);
-			tail = tail.Append(art, byte);
-			*tail.child_slot = child_ptr;
+			auto tail = PrefixHandle::GetTail(art, parent_ptr);
+			tail = PrefixHandle::AppendByte(art, std::move(tail), byte);
+			tail.Child(art) = child_ptr;
 			return;
 		}
 
@@ -201,15 +193,15 @@ void Prefix::ConcatInternal(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, c
 	// The child is not inlined.
 	if (parent_ptr.GetType() == NType::PREFIX) {
 		// Append the byte to the prefix.
-		auto tail = GetTail(art, parent_ptr);
-		tail = tail.Append(art, byte);
+		auto tail = PrefixHandle::GetTail(art, parent_ptr);
+		tail = PrefixHandle::AppendByte(art, std::move(tail), byte);
 
 		// Append the child to the prefix.
 		if (child_ptr.GetType() == NType::PREFIX) {
-			tail.Append(art, child_ptr);
+			PrefixHandle::Append(art, std::move(tail), child_ptr);
 			return;
 		}
-		*tail.child_slot = child_ptr;
+		tail.Child(art) = child_ptr;
 		return;
 	}
 
@@ -237,17 +229,16 @@ void Prefix::ConcatNode4WasGate(ART &art, NodePtr &node4_ptr, const NodePtr chil
 		// At least one more row ID in this gate and the child is a prefix.
 		// We create a new prefix of length one containing the remaining byte.
 		// Then, we append the child prefix.
-		auto prefix = NewInternal(art, node4_ptr, &byte, 1, 0);
-		prefix.child_slot->Clear();
-		prefix.Append(art, child_ptr);
+		auto prefix = PrefixHandle::NewInternal(art, node4_ptr, &byte, 1, 0);
+		PrefixHandle::Append(art, std::move(prefix), child_ptr);
 		node4_ptr.SetGateStatus(GateStatus::GATE_SET);
 		return;
 	}
 	// At least one more row ID in this gate and the child is not a prefix.
 	// We create a new prefix of length one containing the remaining byte.
 	// then, we append the child.
-	auto prefix = NewInternal(art, node4_ptr, &byte, 1, 0);
-	*prefix.child_slot = child_ptr;
+	auto prefix = PrefixHandle::NewInternal(art, node4_ptr, &byte, 1, 0);
+	prefix.Child(art) = child_ptr;
 	node4_ptr.SetGateStatus(GateStatus::GATE_SET);
 }
 
@@ -256,15 +247,15 @@ void Prefix::ConcatChildIsGate(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr
 	if (parent_ptr.GetType() != PREFIX) {
 		// Create a new prefix at the former position of the Node4,
 		// and point it to the gate.
-		auto prefix = NewInternal(art, node4_ptr, &byte, 1, 0);
-		*prefix.child_slot = child_ptr;
+		auto prefix = PrefixHandle::NewInternal(art, node4_ptr, &byte, 1, 0);
+		prefix.Child(art) = child_ptr;
 		return;
 	}
 
 	// The parent is a prefix (chain), so we need to append the byte to its tail.
-	auto tail = GetTail(art, parent_ptr);
-	tail = tail.Append(art, byte);
-	*tail.child_slot = child_ptr;
+	auto tail = PrefixHandle::GetTail(art, parent_ptr);
+	tail = PrefixHandle::AppendByte(art, std::move(tail), byte);
+	tail.Child(art) = child_ptr;
 }
 
 Prefix Prefix::TransformToDeprecatedAppend(ART &art, FixedSizeAllocator &allocator, uint8_t byte) {
