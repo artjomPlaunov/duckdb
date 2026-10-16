@@ -16,43 +16,6 @@
 
 namespace duckdb {
 
-namespace {
-//! Scans a transaction-local delete ART in key order, in batches of STANDARD_VECTOR_SIZE.
-class LocalDeleteScanner {
-public:
-	explicit LocalDeleteScanner(const ART &source)
-	    : arena(BufferAllocator::Get(source.db)), keys(STANDARD_VECTOR_SIZE), row_id_keys(STANDARD_VECTOR_SIZE),
-	      output(arena, keys, row_id_keys, STANDARD_VECTOR_SIZE), it(source), done(!source.root_ptr.HasMetadata()) {
-		if (!done) {
-			it.FindMinimum(source.root_ptr);
-		}
-	}
-	//! Scans the next batch and returns its size (zero once the scan is done).
-	idx_t Next() {
-		if (done) {
-			return 0;
-		}
-		output.Reset();
-		const auto empty_key = ARTKey();
-		if (it.Scan(empty_key, output, false) == ARTScanProgress::COMPLETED) {
-			done = true;
-		}
-		return output.Count();
-	}
-
-public:
-	ArenaAllocator arena;
-	unsafe_vector<ARTKey> keys;
-	unsafe_vector<ARTKey> row_id_keys;
-
-private:
-	KeyRowIdOutput output;
-	Iterator it;
-	bool done;
-};
-
-} // namespace
-
 IndexEntry::IndexEntry(unique_ptr<Index> index_p, idx_t index_oid_p, const ConstraintCheckMode check_mode_p)
     : index_oid(index_oid_p), owned_index(std::move(index_p)), check_mode(check_mode_p) {
 	if (owned_index->IsBound()) {
@@ -179,7 +142,7 @@ static void GatherSelected(const SelectionVector &sel, idx_t sel_count, unsafe_v
 
 //! Deletes a batch from the `from` delta; keys not found there are inserted into the `to` delta.
 static void MoveKeysBetweenDeltas(IndexDeltas &deltas, BoundIndex &main_index, IndexDeltaType from, IndexDeltaType to,
-                                  LocalDeleteScanner &scanner, idx_t count, SelectionVector &non_deleted_sel,
+                                  ARTBatchScanner &scanner, idx_t count, SelectionVector &non_deleted_sel,
                                   unsafe_vector<ARTKey> &sel_keys, unsafe_vector<ARTKey> &sel_row_id_keys) {
 	idx_t deleted = 0;
 	if (auto source = deltas.Find(from)) {
@@ -223,12 +186,16 @@ bool IndexEntry::MergeLocalDeletes(const shared_ptr<IndexEntry> &delete_entry, c
 			// Mismatched key encodings: the merged keys would not be comparable.
 			return false;
 		}
+		if (!delete_art.root_ptr.HasMetadata()) {
+			// Nothing to merge: the entry counts as covered without attaching an overlay.
+			return true;
+		}
 		// Adopt the delete index as a scan overlay first: index scans of older snapshots (and of
 		// transactions starting before this commit publishes) must keep finding the deleted rows.
 		deltas.Adopt(delete_entry);
 	}
 
-	LocalDeleteScanner scanner(delete_art);
+	ARTBatchScanner scanner(delete_art);
 	SelectionVector non_deleted_sel(STANDARD_VECTOR_SIZE);
 	unsafe_vector<ARTKey> sel_keys(STANDARD_VECTOR_SIZE);
 	unsafe_vector<ARTKey> sel_row_id_keys(STANDARD_VECTOR_SIZE);
@@ -236,10 +203,7 @@ bool IndexEntry::MergeLocalDeletes(const shared_ptr<IndexEntry> &delete_entry, c
 		// Lock per batch: probes and scans of other transactions proceed between batches.
 		auto entry_lock = lock.GetExclusiveLock();
 		if (!owned_index || !owned_index->IsBound()) {
-			// The entry was retired, e.g. by a rolled-back CREATE INDEX.
-			if (merged_count == 0) {
-				deltas.Unadopt(*delete_entry);
-			}
+			// The entry was retired, e.g. by a rolled-back CREATE INDEX; Retire() cleared the overlays.
 			return false;
 		}
 		auto count = scanner.Next();
@@ -261,7 +225,8 @@ bool IndexEntry::MergeLocalDeletes(const shared_ptr<IndexEntry> &delete_entry, c
 				main_art.DeleteKeys(scanner.keys, scanner.row_id_keys, count);
 			}
 		} catch (std::exception &ex) {
-			// A partially applied batch cannot be reverted precisely.
+			// DeleteKeys reports no per-key progress: a mid-batch failure leaves an unknown subset
+			// applied, matching the fetch path's failure class.
 			throw FatalException(ErrorData(ex).Message());
 		}
 		// Count the batch only once it was fully applied, so the revert replays exactly the
@@ -279,7 +244,7 @@ void IndexEntry::RevertLocalDeleteMerge(IndexEntry &delete_entry, const idx_t me
 	}
 	auto &delete_art = delete_entry.owned_index->Cast<BoundIndex>().Cast<ART>();
 
-	LocalDeleteScanner scanner(delete_art);
+	ARTBatchScanner scanner(delete_art);
 	SelectionVector non_deleted_sel(STANDARD_VECTOR_SIZE);
 	unsafe_vector<ARTKey> sel_keys(STANDARD_VECTOR_SIZE);
 	unsafe_vector<ARTKey> sel_row_id_keys(STANDARD_VECTOR_SIZE);
@@ -287,8 +252,7 @@ void IndexEntry::RevertLocalDeleteMerge(IndexEntry &delete_entry, const idx_t me
 	while (remaining > 0) {
 		auto entry_lock = lock.GetExclusiveLock();
 		if (!owned_index || !owned_index->IsBound()) {
-			// The entry was retired: there is nothing to restore.
-			deltas.Unadopt(delete_entry);
+			// The entry was retired: there is nothing to restore and Retire() cleared the overlays.
 			return;
 		}
 		auto count = scanner.Next();

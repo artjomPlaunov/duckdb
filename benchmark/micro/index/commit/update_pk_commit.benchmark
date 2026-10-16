@@ -3,7 +3,7 @@
 # group: [commit]
 
 name PK Update Commit
-group index
+group art
 
 load
 CREATE TABLE t (pk INTEGER PRIMARY KEY);

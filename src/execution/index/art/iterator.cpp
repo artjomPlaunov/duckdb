@@ -1,6 +1,7 @@
 #include "duckdb/execution/index/art/iterator.hpp"
 
 #include "duckdb/common/algorithm.hpp"
+#include "duckdb/common/allocator.hpp"
 #include "duckdb/common/limits.hpp"
 #include "duckdb/common/vector_size.hpp"
 #include "duckdb/execution/index/art/art.hpp"
@@ -378,6 +379,26 @@ void Iterator::PopNode() {
 		D_ASSERT(status == GateStatus::GATE_SET);
 		status = GateStatus::GATE_NOT_SET;
 	}
+}
+
+ARTBatchScanner::ARTBatchScanner(const ART &source)
+    : arena(BufferAllocator::Get(source.db)), keys(STANDARD_VECTOR_SIZE), row_id_keys(STANDARD_VECTOR_SIZE),
+      output(arena, keys, row_id_keys, STANDARD_VECTOR_SIZE), it(source), done(!source.root_ptr.HasMetadata()) {
+	if (!done) {
+		it.FindMinimum(source.root_ptr);
+	}
+}
+
+idx_t ARTBatchScanner::Next() {
+	if (done) {
+		return 0;
+	}
+	output.Reset();
+	const auto empty_key = ARTKey();
+	if (it.Scan(empty_key, output, false) == ARTScanProgress::COMPLETED) {
+		done = true;
+	}
+	return output.Count();
 }
 
 } // namespace duckdb

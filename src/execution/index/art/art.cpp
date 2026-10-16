@@ -1475,31 +1475,18 @@ bool ART::MergeIndexes(IndexLock &state, BoundIndex &source_index) {
 void ART::RemovalMerge(IndexLock &state, BoundIndex &source_index) {
 	state.AssertHeld(*this);
 	auto &source = source_index.Cast<ART>();
-	if (!source.root_ptr.HasMetadata()) {
-		return;
-	}
 
-	ArenaAllocator arena(BufferAllocator::Get(db));
 	idx_t scan_count = 0;
 	idx_t delete_count = 0;
-
-	Iterator it(source);
-	it.FindMinimum(source.root_ptr);
-
-	unsafe_vector<ARTKey> keys(STANDARD_VECTOR_SIZE);
-	unsafe_vector<ARTKey> row_id_keys(STANDARD_VECTOR_SIZE);
-	ARTKey empty_key = ARTKey();
-
-	KeyRowIdOutput output(arena, keys, row_id_keys, STANDARD_VECTOR_SIZE);
-	ARTScanProgress result;
-	do {
-		output.Reset();
-		result = it.Scan(empty_key, output, false);
-		if (output.Count() > 0) {
-			scan_count += output.Count();
-			delete_count += DeleteKeys(keys, row_id_keys, output.Count());
+	ARTBatchScanner scanner(source);
+	while (true) {
+		auto count = scanner.Next();
+		if (count == 0) {
+			break;
 		}
-	} while (result == ARTScanProgress::PAUSED);
+		scan_count += count;
+		delete_count += DeleteKeys(scanner.keys, scanner.row_id_keys, count);
+	}
 
 	if (delete_count != scan_count) {
 		throw InternalException("Failed to remove all rows while merging checkpoint deltas - "

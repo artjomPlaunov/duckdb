@@ -3,7 +3,7 @@
 # group: [commit]
 
 name Mixed Index Delete Commit
-group index
+group art
 
 load
 CREATE TABLE t (pk INTEGER PRIMARY KEY, v INTEGER);

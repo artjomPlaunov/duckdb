@@ -56,16 +56,11 @@ SELECT count(*) FROM d;
 ----
 10
 
-# the delete-merge keeps the local delete index and the deleted_rows_in_use copies alive through
-# the commit, so the commit itself needs more headroom than the cleanup below
 statement ok
-SET memory_limit = '3.9MB';
+SET memory_limit = '3.3MB';
 
 statement ok
 COMMIT;
-
-statement ok
-SET memory_limit = '3.3MB';
 
 # the cleanup runs now: it removes the deleted rows from deleted_rows_in_use, then fails on the update entries
 statement ok con2

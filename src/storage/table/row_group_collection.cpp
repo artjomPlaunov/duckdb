@@ -72,6 +72,14 @@ static bool CanVacuumRemap(DataTableInfo &table_info, AttachedDatabase &attached
 			}
 			return false;
 		}
+		// Scan-overlay and deleted-rows deltas hold row ids of removed rows until cleanup detaches
+		// them: a remap must not reassign those row ids while the deltas are still readable.
+		if (art.FindDelta(IndexDeltaType::DELETED_ROWS_IN_USE) || !art.AdoptedDeltas().empty()) {
+			if (remap_indexes) {
+				remap_indexes->clear();
+			}
+			return false;
+		}
 		if (remap_indexes) {
 			remap_indexes->push_back(entry);
 		}

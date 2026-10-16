@@ -192,9 +192,10 @@ SinkFinalizeType PhysicalCreateIndex::Finalize(Pipeline &pipeline, Event &event,
 	if (local_table_storage) {
 		// Existing transaction-local rows are verified when committing, so we only add a delete index.
 		index_entry->InitializeLocalDeleteIndex(local_table_storage->delete_indexes);
-		// The new delete index may miss this transaction's earlier deletes: disable the delete-merge.
-		local_storage.MarkDeleteIndexesIncomplete(storage);
 	}
+	// The new index takes the fetch path: its delete index may miss earlier deletes, and its WAL image
+	// must hold every row this transaction deletes so that replay strips them exactly.
+	local_storage.MarkDeleteIndexesIncomplete(storage);
 
 	return SinkFinalizeType::READY;
 }

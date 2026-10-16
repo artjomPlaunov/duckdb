@@ -77,3 +77,43 @@ statement error con1
 INSERT INTO t VALUES (3999, 0);
 ----
 <REGEX>:Constraint Error.*
+
+# insert-only commits must not attach overlays: a long-held reader sees correct point lookups
+# and the committing side stays correct across many such commits
+statement ok con2
+BEGIN;
+
+query I con2
+SELECT count(*) FROM t;
+----
+10000
+
+loop i 0 20
+
+statement ok con1
+INSERT INTO t VALUES (100000 + {i}, {i});
+
+endloop
+
+query I con2
+SELECT count(*) FROM t;
+----
+10000
+
+query II con2
+SELECT i, j FROM t WHERE i = 1500;
+----
+1500	-1
+
+statement ok con2
+COMMIT;
+
+query I con1
+SELECT count(*) FROM t;
+----
+10020
+
+query II con1
+SELECT i, j FROM t WHERE i = 100005;
+----
+100005	5

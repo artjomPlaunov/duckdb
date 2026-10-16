@@ -33,7 +33,7 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/single_file_block_manager.hpp"
 #include "duckdb/storage/storage_manager.hpp"
-#include "duckdb/common/unordered_map.hpp"
+#include "duckdb/common/reference_map.hpp"
 #include "duckdb/storage/table/column_data.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/delete_state.hpp"
@@ -95,18 +95,20 @@ public:
 	};
 	vector<ReplayIndexInfo> replay_index_infos;
 	//! Row ids deleted by the current replay transaction, per table. The WAL images of indexes created
-	//! in the same transaction were serialized before the commit removed these rows.
-	unordered_map<DataTableInfo *, unsafe_vector<row_t>> replay_transaction_deletes;
+	//! in the same transaction were serialized before the commit removed these rows. Recorded
+	//! unconditionally: deletes that precede the CREATE INDEX in the transaction also need stripping.
+	reference_map_t<DataTableInfo, unsafe_vector<row_t>> replay_transaction_deletes;
 
 	//! Removes the replayed transaction's deleted rows from a just-attached index.
 	//! Unbound indexes buffer the removal; it applies when the index is first bound.
 	void StripTransactionDeletes(ClientContext &strip_context, DataTableInfo &table_info,
 	                             RowGroupCollection &row_groups, IndexEntry &index_entry) {
-		auto deletes = replay_transaction_deletes.find(&table_info);
+		auto deletes = replay_transaction_deletes.find(table_info);
 		if (deletes == replay_transaction_deletes.end() || deletes->second.empty()) {
 			return;
 		}
-		// Every other index already had these rows removed at the replay commit.
+		// Every other index already had these rows removed at the replay commit: marking them
+		// covered reuses the fetch-based removal machinery to strip a single index.
 		reference_set_t<IndexEntry> covered_entries;
 		for (auto entry : table_info.GetIndexes().IndexEntries()) {
 			if (entry.get() != &index_entry) {
@@ -1429,7 +1431,7 @@ void WriteAheadLogDeserializer::ReplayDelete() {
 	storage.Delete(delete_state, context, *state.current_table, row_identifiers, chunk.size());
 
 	// Record the deletes: indexes attached at the end of this transaction must strip these rows.
-	auto &deleted_rows = state.replay_transaction_deletes[storage.GetDataTableInfo().get()];
+	auto &deleted_rows = state.replay_transaction_deletes[*storage.GetDataTableInfo()];
 	for (idx_t i = 0; i < chunk.size(); i++) {
 		deleted_rows.push_back(source_ids[i]);
 	}

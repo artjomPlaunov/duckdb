@@ -3,7 +3,7 @@
 # group: [commit]
 
 name FK Child Insert
-group index
+group art
 
 load
 CREATE TABLE parent (id INTEGER PRIMARY KEY);

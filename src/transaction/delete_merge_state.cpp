@@ -36,8 +36,10 @@ void DeleteMergeState::MergeTable(TableIndexList &indexes, TableIndexList &delet
 		}
 		if (complete) {
 			covered.insert(*entry);
-		} else if (record.merged_count == 0) {
-			// Nothing was applied: keep the delete index for append-time exclusion checks.
+		}
+		if (record.merged_count == 0) {
+			// Nothing was applied and no overlay is attached: keep the delete index in the
+			// local storage for append-time exclusion checks.
 			records.pop_back();
 			continue;
 		}
@@ -45,14 +47,6 @@ void DeleteMergeState::MergeTable(TableIndexList &indexes, TableIndexList &delet
 		// outcome is known, and its destructor would retire the entry.
 		delete_indexes.ExtractEntry(delete_entry->GetIndexOid());
 	}
-}
-
-void DeleteMergeState::FinalizeCommit(const ActiveTransactionState active_transactions) {
-	if (active_transactions != ActiveTransactionState::NO_OTHER_TRANSACTIONS) {
-		// Older snapshots still scan the adopted delete indexes: detach them in Cleanup.
-		return;
-	}
-	Cleanup();
 }
 
 void DeleteMergeState::Cleanup() {

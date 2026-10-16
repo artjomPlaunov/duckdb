@@ -230,4 +230,22 @@ private:
 	//! Pop the top node from the stack of iterator entries and adjust the current key.
 	void PopNode();
 };
+
+//! Scans an ART in key order, in batches of STANDARD_VECTOR_SIZE.
+class ARTBatchScanner {
+public:
+	explicit ARTBatchScanner(const ART &source);
+	//! Scans the next batch and returns its size (zero once the scan is done).
+	idx_t Next();
+
+public:
+	ArenaAllocator arena;
+	unsafe_vector<ARTKey> keys;
+	unsafe_vector<ARTKey> row_id_keys;
+
+private:
+	KeyRowIdOutput output;
+	Iterator it;
+	bool done;
+};
 } // namespace duckdb

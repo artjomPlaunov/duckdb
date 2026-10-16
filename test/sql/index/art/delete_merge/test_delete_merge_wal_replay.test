@@ -114,3 +114,74 @@ SELECT a, b FROM new_pk ORDER BY a;
 1	10
 2	20
 3	30
+
+# indexes created BEFORE deletes in the same transaction: the replayed DELETE records come after
+# the CREATE INDEX record, but the serialized image predates the commit's removal of the rows
+statement ok
+CREATE TABLE strip1(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO strip1 VALUES (1, 10), (2, 20), (3, 30);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE UNIQUE INDEX idx_strip1_b ON strip1(b);
+
+statement ok
+DELETE FROM strip1 WHERE a = 1;
+
+statement ok
+COMMIT;
+
+# delete plus an insert of a fresh key after creating the index in the same transaction
+statement ok
+CREATE TABLE strip2(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO strip2 VALUES (1, 10), (2, 20), (3, 30);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE UNIQUE INDEX idx_strip2_b ON strip2(b);
+
+statement ok
+DELETE FROM strip2 WHERE a = 1;
+
+statement ok
+INSERT INTO strip2 VALUES (4, 40);
+
+statement ok
+COMMIT;
+
+restart
+
+# the deleted keys must be reusable, the inserted key must still conflict
+statement ok
+INSERT INTO strip1 VALUES (1, 10);
+
+statement ok
+INSERT INTO strip2 VALUES (1, 10);
+
+statement error
+INSERT INTO strip2 VALUES (5, 40);
+----
+<REGEX>:Constraint Error.*
+
+query II
+SELECT a, b FROM strip1 ORDER BY a;
+----
+1	10
+2	20
+3	30
+
+query II
+SELECT a, b FROM strip2 ORDER BY a;
+----
+1	10
+2	20
+3	30
+4	40

@@ -321,9 +321,9 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 			bool sync_now = commit_info.active_transactions == ActiveTransactionState::NO_OTHER_TRANSACTIONS;
 			commit_info.wal_sync_offset = commit_state->FlushCommit(sync_now);
 		}
-		if (delete_merge_state) {
-			// The commit can no longer fail: detach the adopted delete indexes if no one needs them.
-			delete_merge_state->FinalizeCommit(commit_info.active_transactions);
+		if (delete_merge_state && commit_info.active_transactions == ActiveTransactionState::NO_OTHER_TRANSACTIONS) {
+			// The commit can no longer fail and no older snapshot exists: detach the adopted delete indexes.
+			delete_merge_state->Cleanup();
 		}
 		drop_state.FinalizeCommit();
 		return ErrorData();

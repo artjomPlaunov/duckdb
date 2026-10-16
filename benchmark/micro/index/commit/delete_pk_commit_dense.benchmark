@@ -3,7 +3,7 @@
 # group: [commit]
 
 name PK Delete Commit (Dense)
-group index
+group art
 
 load
 CREATE TABLE t (pk INTEGER PRIMARY KEY);

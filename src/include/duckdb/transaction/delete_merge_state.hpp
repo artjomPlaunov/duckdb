@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include "duckdb/common/enums/active_transaction_state.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/shared_ptr.hpp"
@@ -28,10 +27,7 @@ public:
 	const reference_set_t<IndexEntry> &CoveredEntries() const {
 		return covered;
 	}
-	//! Detaches the adopted delete indexes after a successful commit, or keeps them attached
-	//! for older snapshots until Cleanup when other transactions are alive.
-	void FinalizeCommit(ActiveTransactionState active_transactions);
-	//! Detaches any remaining adopted delete indexes once no snapshot can see the deleted rows.
+	//! Detaches the adopted delete indexes once no snapshot can see the deleted rows.
 	void Cleanup();
 	//! Re-inserts the merged deletes into the main indexes after a failed commit.
 	void Revert(optional_idx active_checkpoint);

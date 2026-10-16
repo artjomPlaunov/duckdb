@@ -3,7 +3,7 @@
 # group: [commit]
 
 name PK Delete Commit (Random)
-group index
+group art
 
 load
 CREATE TABLE t (pk BIGINT PRIMARY KEY, id INTEGER);
