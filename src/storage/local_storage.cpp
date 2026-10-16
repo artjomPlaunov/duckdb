@@ -13,7 +13,6 @@
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/row_group.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
-#include "duckdb/main/settings.hpp"
 #include "duckdb/transaction/delete_merge_state.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
@@ -577,9 +576,6 @@ void LocalStorage::DeleteMerge(DataTable &table, LocalTableStorage &storage) {
 	}
 	if (tables_with_unmaintained_deletes.find(table) != tables_with_unmaintained_deletes.end()) {
 		// Some committed-row deletes bypassed the delete indexes: they are incomplete.
-		return;
-	}
-	if (!Settings::Get<DeleteMergeSetting>(table.db.GetDatabase())) {
 		return;
 	}
 	auto active_checkpoint = transaction.GetTransactionManager().GetActiveCheckpoint();

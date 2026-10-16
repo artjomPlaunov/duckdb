@@ -2,11 +2,6 @@
 # description: ALTER ADD PRIMARY KEY / UNIQUE after a maintained delete in the same transaction
 # group: [delete_merge]
 
-foreach dm true false
-
-statement ok
-SET delete_merge=${dm};
-
 # ADD PRIMARY KEY: the new index is built from a snapshot that still contains this
 # transaction's deleted rows; those ghost keys must leave the new index at commit
 statement ok
@@ -90,4 +85,3 @@ INSERT INTO u VALUES (200, 1000);
 statement ok
 DROP TABLE u;
 
-endloop

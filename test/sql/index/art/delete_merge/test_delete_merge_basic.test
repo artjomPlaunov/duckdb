@@ -2,11 +2,6 @@
 # description: Delete-merge of local delete indexes at commit: basic flows, A/B against the fetch path
 # group: [delete_merge]
 
-foreach dm true false
-
-statement ok
-SET delete_merge=${dm};
-
 statement ok
 CREATE TABLE t(i INTEGER PRIMARY KEY, j INTEGER);
 
@@ -160,4 +155,3 @@ DROP TABLE t;
 statement ok
 DROP TABLE multi;
 
-endloop

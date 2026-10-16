@@ -2,11 +2,6 @@
 # description: A deferred-unique violation fails the flush after the delete-merge ran; the revert restores the keys
 # group: [delete_merge]
 
-foreach dm true false
-
-statement ok
-SET delete_merge=${dm};
-
 statement ok
 CREATE TABLE t(i INTEGER PRIMARY KEY, k INTEGER UNIQUE DEFERRED);
 
@@ -58,4 +53,3 @@ SELECT count(*) FROM t;
 statement ok
 DROP TABLE t;
 
-endloop
