@@ -167,96 +167,94 @@ void IndexEntry::InitializeLocalIndexesInternal(TableIndexList &delete_indexes,
 }
 
 //! Gathers the selected (key, row id) pairs of a batch into scratch vectors.
-static idx_t GatherSelected(const SelectionVector &sel, idx_t sel_count, unsafe_vector<ARTKey> &keys,
-                            unsafe_vector<ARTKey> &row_id_keys, unsafe_vector<ARTKey> &sel_keys,
-                            unsafe_vector<ARTKey> &sel_row_id_keys) {
+static void GatherSelected(const SelectionVector &sel, idx_t sel_count, unsafe_vector<ARTKey> &keys,
+                           unsafe_vector<ARTKey> &row_id_keys, unsafe_vector<ARTKey> &sel_keys,
+                           unsafe_vector<ARTKey> &sel_row_id_keys) {
 	for (idx_t i = 0; i < sel_count; i++) {
 		auto idx = sel.get_index(i);
 		sel_keys[i] = keys[idx];
 		sel_row_id_keys[i] = row_id_keys[idx];
 	}
-	return sel_count;
 }
 
-bool IndexEntry::MergeLocalDeletes(IndexEntry &delete_entry, const optional_idx active_checkpoint, idx_t &merged_count,
-                                   bool &in_use_was_empty) {
-	auto delete_lock = delete_entry.lock.GetSharedLock();
-	D_ASSERT(delete_entry.owned_index->IsBound());
-	auto &delete_art = delete_entry.owned_index->Cast<BoundIndex>().Cast<ART>();
+//! Deletes a batch from the `from` delta; keys not found there are inserted into the `to` delta.
+static void MoveKeysBetweenDeltas(IndexDeltas &deltas, BoundIndex &main_index, IndexDeltaType from, IndexDeltaType to,
+                                  LocalDeleteScanner &scanner, idx_t count, SelectionVector &non_deleted_sel,
+                                  unsafe_vector<ARTKey> &sel_keys, unsafe_vector<ARTKey> &sel_row_id_keys) {
+	idx_t deleted = 0;
+	if (auto source = deltas.Find(from)) {
+		IndexLock source_lock(*source);
+		deleted = source->Cast<ART>().DeleteKeys(scanner.keys, scanner.row_id_keys, count, nullptr, &non_deleted_sel);
+	} else {
+		for (idx_t i = 0; i < count; i++) {
+			non_deleted_sel.set_index(i, i);
+		}
+	}
+	auto remaining_count = count - deleted;
+	if (remaining_count == 0) {
+		return;
+	}
+	GatherSelected(non_deleted_sel, remaining_count, scanner.keys, scanner.row_id_keys, sel_keys, sel_row_id_keys);
+	auto &target = deltas.GetOrCreate(main_index, to);
+	IndexLock target_lock(target);
+	auto error = target.Cast<ART>().InsertKeys(scanner.arena, sel_keys, sel_row_id_keys, remaining_count,
+	                                           DeleteIndexInfo(), IndexAppendMode::INSERT_DUPLICATES);
+	if (error.HasError()) {
+		error.Throw();
+	}
+}
 
-	LocalDeleteScanner scanner(delete_art);
-	SelectionVector non_deleted_sel(STANDARD_VECTOR_SIZE);
-	unsafe_vector<ARTKey> sel_keys(STANDARD_VECTOR_SIZE);
-	unsafe_vector<ARTKey> sel_row_id_keys(STANDARD_VECTOR_SIZE);
-	bool checked = false;
-	while (true) {
-		// Lock per batch: probes and scans of other transactions proceed between batches.
+bool IndexEntry::MergeLocalDeletes(const shared_ptr<IndexEntry> &delete_entry, const optional_idx active_checkpoint,
+                                   idx_t &merged_count) {
+	auto delete_lock = delete_entry->lock.GetSharedLock();
+	D_ASSERT(delete_entry->owned_index->IsBound());
+	auto &delete_art = delete_entry->owned_index->Cast<BoundIndex>().Cast<ART>();
+	{
 		auto entry_lock = lock.GetExclusiveLock();
 		if (!owned_index || !owned_index->IsBound()) {
 			// The entry was retired, e.g. by a rolled-back CREATE INDEX.
 			return false;
 		}
 		auto &bound_index = owned_index->Cast<BoundIndex>();
-		if (!checked) {
-			if (!bound_index.IsUnique() || bound_index.GetIndexType() != ART::TYPE_NAME) {
-				return false;
+		if (!bound_index.IsUnique() || bound_index.GetIndexType() != ART::TYPE_NAME) {
+			return false;
+		}
+		if (bound_index.Cast<ART>().storage_version != delete_art.storage_version) {
+			// Mismatched key encodings: the merged keys would not be comparable.
+			return false;
+		}
+		// Adopt the delete index as a scan overlay first: index scans of older snapshots (and of
+		// transactions starting before this commit publishes) must keep finding the deleted rows.
+		deltas.Adopt(delete_entry);
+	}
+
+	LocalDeleteScanner scanner(delete_art);
+	SelectionVector non_deleted_sel(STANDARD_VECTOR_SIZE);
+	unsafe_vector<ARTKey> sel_keys(STANDARD_VECTOR_SIZE);
+	unsafe_vector<ARTKey> sel_row_id_keys(STANDARD_VECTOR_SIZE);
+	while (true) {
+		// Lock per batch: probes and scans of other transactions proceed between batches.
+		auto entry_lock = lock.GetExclusiveLock();
+		if (!owned_index || !owned_index->IsBound()) {
+			// The entry was retired, e.g. by a rolled-back CREATE INDEX.
+			if (merged_count == 0) {
+				deltas.Unadopt(*delete_entry);
 			}
-			if (bound_index.Cast<ART>().storage_version != delete_art.storage_version) {
-				// Mismatched key encodings: the merged keys would not be comparable.
-				return false;
-			}
-			in_use_was_empty = !deltas.Find(IndexDeltaType::DELETED_ROWS_IN_USE);
-			checked = true;
+			return false;
 		}
 		auto count = scanner.Next();
 		if (count == 0) {
 			return true;
 		}
-		auto &main_art = bound_index.Cast<ART>();
-		// Copy the batch into deleted_rows_in_use first: index scans of older snapshots (and of
-		// transactions starting before this commit publishes) must keep finding the deleted rows.
-		auto &in_use = deltas.GetOrCreate(main_art, IndexDeltaType::DELETED_ROWS_IN_USE).Cast<ART>();
-		try {
-			IndexLock in_use_lock(in_use);
-			auto error = in_use.InsertKeys(scanner.arena, scanner.keys, scanner.row_id_keys, count, DeleteIndexInfo(),
-			                               IndexAppendMode::INSERT_DUPLICATES);
-			if (error.HasError()) {
-				error.Throw();
-			}
-		} catch (...) {
-			// Nothing reached the main index: remove the partial copies and abort the commit cleanly.
-			IndexLock in_use_lock(in_use);
-			in_use.DeleteKeys(scanner.keys, scanner.row_id_keys, count);
-			throw;
-		}
+		auto &main_art = owned_index->Cast<BoundIndex>().Cast<ART>();
 		try {
 			// Routing is decided per batch: MergeCheckpointDeltas can flip ShouldUse between batches.
 			if (deltas.ShouldUse(active_checkpoint)) {
 				// A checkpoint owns the main index: delete from added_data where possible, record the
 				// remaining keys in removed_data (mirrors ApplyIndexRemovalDuringCheckpoint per key).
-				idx_t deleted = 0;
-				if (auto added = deltas.Find(IndexDeltaType::ADDED_DATA_DURING_CHECKPOINT)) {
-					IndexLock added_lock(*added);
-					deleted = added->Cast<ART>().DeleteKeys(scanner.keys, scanner.row_id_keys, count, nullptr,
-					                                        &non_deleted_sel);
-				} else {
-					for (idx_t i = 0; i < count; i++) {
-						non_deleted_sel.set_index(i, i);
-					}
-				}
-				auto remaining_count = count - deleted;
-				if (remaining_count != 0) {
-					GatherSelected(non_deleted_sel, remaining_count, scanner.keys, scanner.row_id_keys, sel_keys,
-					               sel_row_id_keys);
-					auto &removed = deltas.GetOrCreate(main_art, IndexDeltaType::REMOVED_DATA_DURING_CHECKPOINT);
-					IndexLock removed_lock(removed);
-					auto error =
-					    removed.Cast<ART>().InsertKeys(scanner.arena, sel_keys, sel_row_id_keys, remaining_count,
-					                                   DeleteIndexInfo(), IndexAppendMode::INSERT_DUPLICATES);
-					if (error.HasError()) {
-						error.Throw();
-					}
-				}
+				MoveKeysBetweenDeltas(deltas, main_art, IndexDeltaType::ADDED_DATA_DURING_CHECKPOINT,
+				                      IndexDeltaType::REMOVED_DATA_DURING_CHECKPOINT, scanner, count, non_deleted_sel,
+				                      sel_keys, sel_row_id_keys);
 			} else {
 				IndexLock main_lock(main_art);
 				// Keys that are not found are skipped, matching the fetch path's tolerance.
@@ -290,39 +288,21 @@ void IndexEntry::RevertLocalDeleteMerge(IndexEntry &delete_entry, const idx_t me
 		auto entry_lock = lock.GetExclusiveLock();
 		if (!owned_index || !owned_index->IsBound()) {
 			// The entry was retired: there is nothing to restore.
+			deltas.Unadopt(delete_entry);
 			return;
 		}
 		auto count = scanner.Next();
 		if (count == 0) {
-			return;
+			break;
 		}
 		count = MinValue<idx_t>(count, remaining);
 		auto &main_art = owned_index->Cast<BoundIndex>().Cast<ART>();
 		// Routing is decided from the state at revert time (mirrors REVERT_MAIN_INDEX during a
 		// checkpoint): keys found in removed_data leave it, the rest return to added_data.
 		if (deltas.ShouldUse(active_checkpoint)) {
-			idx_t deleted = 0;
-			if (auto removed = deltas.Find(IndexDeltaType::REMOVED_DATA_DURING_CHECKPOINT)) {
-				IndexLock removed_lock(*removed);
-				deleted = removed->Cast<ART>().DeleteKeys(scanner.keys, scanner.row_id_keys, count, nullptr,
-				                                          &non_deleted_sel);
-			} else {
-				for (idx_t i = 0; i < count; i++) {
-					non_deleted_sel.set_index(i, i);
-				}
-			}
-			auto remaining_count = count - deleted;
-			if (remaining_count != 0) {
-				GatherSelected(non_deleted_sel, remaining_count, scanner.keys, scanner.row_id_keys, sel_keys,
-				               sel_row_id_keys);
-				auto &added = deltas.GetOrCreate(main_art, IndexDeltaType::ADDED_DATA_DURING_CHECKPOINT);
-				IndexLock added_lock(added);
-				auto error = added.Cast<ART>().InsertKeys(scanner.arena, sel_keys, sel_row_id_keys, remaining_count,
-				                                          DeleteIndexInfo(), IndexAppendMode::INSERT_DUPLICATES);
-				if (error.HasError()) {
-					error.Throw();
-				}
-			}
+			MoveKeysBetweenDeltas(deltas, main_art, IndexDeltaType::REMOVED_DATA_DURING_CHECKPOINT,
+			                      IndexDeltaType::ADDED_DATA_DURING_CHECKPOINT, scanner, count, non_deleted_sel,
+			                      sel_keys, sel_row_id_keys);
 		} else {
 			IndexLock main_lock(main_art);
 			// The undo-buffer rollback already removed this transaction's appends of the same keys.
@@ -332,55 +312,16 @@ void IndexEntry::RevertLocalDeleteMerge(IndexEntry &delete_entry, const idx_t me
 				error.Throw();
 			}
 		}
-		if (auto in_use = deltas.Find(IndexDeltaType::DELETED_ROWS_IN_USE)) {
-			IndexLock in_use_lock(*in_use);
-			in_use->Cast<ART>().DeleteKeys(scanner.keys, scanner.row_id_keys, count);
-		}
 		remaining -= count;
 	}
+	// Detach only after every key is back in the main index, so scans never miss rows.
+	auto entry_lock = lock.GetExclusiveLock();
+	deltas.Unadopt(delete_entry);
 }
 
-void IndexEntry::FinalizeLocalDeleteMerge(IndexEntry &delete_entry, const idx_t merged_count,
-                                          const bool in_use_was_empty) {
-	if (merged_count == 0) {
-		return;
-	}
-	if (in_use_was_empty) {
-		auto entry_lock = lock.GetExclusiveLock();
-		if (!owned_index) {
-			return;
-		}
-		// deleted_rows_in_use holds only this transaction's copies: drop it as a whole.
-		deltas.Drop(IndexDeltaType::DELETED_ROWS_IN_USE);
-		return;
-	}
-	auto delete_lock = delete_entry.lock.GetSharedLock();
-	if (!delete_entry.owned_index || !delete_entry.owned_index->IsBound()) {
-		// leftover copies in deleted_rows_in_use only cost memory
-		return;
-	}
-	auto &delete_art = delete_entry.owned_index->Cast<BoundIndex>().Cast<ART>();
-
-	LocalDeleteScanner scanner(delete_art);
-	idx_t remaining = merged_count;
-	while (remaining > 0) {
-		auto entry_lock = lock.GetExclusiveLock();
-		if (!owned_index) {
-			return;
-		}
-		auto count = scanner.Next();
-		if (count == 0) {
-			return;
-		}
-		count = MinValue<idx_t>(count, remaining);
-		auto in_use = deltas.Find(IndexDeltaType::DELETED_ROWS_IN_USE);
-		if (!in_use) {
-			return;
-		}
-		IndexLock in_use_lock(*in_use);
-		in_use->Cast<ART>().DeleteKeys(scanner.keys, scanner.row_id_keys, count);
-		remaining -= count;
-	}
+void IndexEntry::DetachLocalDeleteMerge(const IndexEntry &delete_entry) {
+	auto entry_lock = lock.GetExclusiveLock();
+	deltas.Unadopt(delete_entry);
 }
 
 void IndexEntry::AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids) {
@@ -736,6 +677,9 @@ void IndexEntry::VerifyBuffers() {
 	if (auto delta = deltas.Find(IndexDeltaType::DELETED_ROWS_IN_USE)) {
 		delta->VerifyBuffers();
 	}
+	for (auto &adopted : deltas.AdoptedDeletes()) {
+		adopted->owned_index->Cast<BoundIndex>().VerifyBuffers();
+	}
 	if (owned_index->IsBound()) {
 		owned_index->Cast<BoundIndex>().VerifyBuffers();
 	}
@@ -892,8 +836,17 @@ void IndexDeltas::MarkWritten(const optional_idx checkpoint_id) {
 	checkpoint.last_written_checkpoint = checkpoint_id;
 }
 
-void IndexDeltas::Drop(const IndexDeltaType type) {
-	GetPointer(type).reset();
+void IndexDeltas::Adopt(shared_ptr<IndexEntry> delete_entry) {
+	adopted_deletes.push_back(std::move(delete_entry));
+}
+
+void IndexDeltas::Unadopt(const IndexEntry &delete_entry) {
+	for (idx_t i = 0; i < adopted_deletes.size(); i++) {
+		if (adopted_deletes[i].get() == &delete_entry) {
+			adopted_deletes.erase_at(i);
+			return;
+		}
+	}
 }
 
 void IndexDeltas::Reset() {
@@ -901,6 +854,7 @@ void IndexDeltas::Reset() {
 	checkpoint.added_data.reset();
 	checkpoint.removed_data.reset();
 	checkpoint.last_written_checkpoint = optional_idx();
+	adopted_deletes.clear();
 }
 
 } // namespace duckdb

@@ -1,0 +1,18 @@
+# name: benchmark/micro/index/commit/update_pk_commit.benchmark
+# description: Commit a transaction updating 1M of 10M PRIMARY KEY values
+# group: [commit]
+
+name PK Update Commit
+group index
+
+load
+CREATE TABLE t (pk INTEGER PRIMARY KEY);
+INSERT INTO t SELECT range::INTEGER FROM range(10000000);
+
+run
+BEGIN;
+UPDATE t SET pk = pk + 20000000 WHERE pk < 1000000;
+COMMIT;
+
+cleanup
+UPDATE t SET pk = pk - 20000000 WHERE pk >= 20000000;

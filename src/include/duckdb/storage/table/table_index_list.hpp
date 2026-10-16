@@ -61,12 +61,10 @@ public:
 	void RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, IndexRemovalType removal_type,
 	                       optional_idx active_checkpoint = optional_idx(),
 	                       optional_ptr<const reference_set_t<IndexEntry>> covered_entries = nullptr);
-	//! Returns true if every index entry is in the covered set.
-	bool AllCovered(const reference_set_t<IndexEntry> &covered_entries) const;
 	//! Removes an index entry from the list of index entries and release any storage the index owns.
 	void RemoveIndex(idx_t index_oid);
 	//! Removes and returns an index entry without retiring it.
-	shared_ptr<IndexEntry> ExtractEntry(const IndexEntry &index);
+	shared_ptr<IndexEntry> ExtractEntry(idx_t index_oid);
 	//! Returns shared ownership of the stable logical index entry matching the name.
 	shared_ptr<IndexEntry> FindEntry(const Identifier &name) const;
 	//! Returns the entry matching the index OID.

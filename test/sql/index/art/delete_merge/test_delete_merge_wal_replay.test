@@ -53,3 +53,64 @@ statement error
 INSERT INTO t VALUES (0, 0);
 ----
 <REGEX>:Constraint Error.*
+
+# an index created after same-transaction deletes: its WAL image still holds the deleted keys,
+# but replaying the deletes removes them again at the replay commit
+statement ok
+CREATE TABLE new_idx(a INTEGER, b INTEGER);
+
+statement ok
+INSERT INTO new_idx VALUES (1, 10), (2, 20), (3, 30);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM new_idx WHERE a = 1;
+
+statement ok
+CREATE UNIQUE INDEX idx_new_b ON new_idx(b);
+
+statement ok
+COMMIT;
+
+statement ok
+CREATE TABLE new_pk(a INTEGER UNIQUE, b INTEGER);
+
+statement ok
+INSERT INTO new_pk VALUES (1, 10), (2, 20), (3, 30);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM new_pk WHERE a = 1;
+
+statement ok
+ALTER TABLE new_pk ADD PRIMARY KEY (b);
+
+statement ok
+COMMIT;
+
+restart
+
+# the deleted rows' keys must be reusable on the new indexes
+statement ok
+INSERT INTO new_idx VALUES (1, 10);
+
+statement ok
+INSERT INTO new_pk VALUES (1, 10);
+
+query II
+SELECT a, b FROM new_idx ORDER BY a;
+----
+1	10
+2	20
+3	30
+
+query II
+SELECT a, b FROM new_pk ORDER BY a;
+----
+1	10
+2	20
+3	30

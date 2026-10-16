@@ -1,0 +1,18 @@
+# name: benchmark/micro/index/commit/delete_pk_commit_random.benchmark
+# description: Commit a transaction deleting 5M of 10M rows with a sparse hash-distributed PRIMARY KEY
+# group: [commit]
+
+name PK Delete Commit (Random)
+group index
+
+load
+CREATE TABLE t (pk BIGINT PRIMARY KEY, id INTEGER);
+INSERT INTO t SELECT (hash(range) >> 1)::BIGINT, range::INTEGER FROM range(10000000);
+
+run
+BEGIN;
+DELETE FROM t WHERE id < 5000000;
+COMMIT;
+
+cleanup
+INSERT INTO t SELECT (hash(range) >> 1)::BIGINT, range::INTEGER FROM range(5000000);

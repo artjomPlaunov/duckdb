@@ -1029,6 +1029,10 @@ void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableInd
                                            optional_ptr<const reference_set_t<IndexEntry>> covered_entries) {
 	// Collect the indexed columns, skipping indexes already covered by the delete-merge.
 	auto indexed_column_id_set = indexes.GetIndexedColumns(covered_entries);
+	if (indexed_column_id_set.empty()) {
+		// every index of the table was covered: skip the row fetch entirely
+		return;
+	}
 
 	// Sorted so that the fetched columns align with the ascending physical order used when
 	// referencing them into result_chunk below.

@@ -61,7 +61,7 @@ class DeleteLocalState : public LocalSinkState {
 public:
 	DeleteLocalState(ClientContext &context, TableCatalogEntry &table,
 	                 const vector<unique_ptr<BoundConstraint>> &bound_constraints,
-	                 const vector<LogicalType> &return_types, bool return_chunk) {
+	                 const vector<LogicalType> &return_types, bool return_chunk, bool has_unique_indexes) {
 		// For RETURNING: use operator's return types (may include virtual columns)
 		// For non-RETURNING with indexes: use table types for index updates
 		auto types = return_chunk ? return_types : table.GetTypes();
@@ -69,7 +69,8 @@ public:
 		delete_chunk.Initialize(Allocator::Get(context), types, initialize);
 
 		auto &storage = table.GetStorage();
-		delete_state = storage.InitializeDelete(table, context, bound_constraints);
+		// Deleted rows are appended to the delete indexes in Sink when unique indexes exist.
+		delete_state = storage.InitializeDelete(table, context, bound_constraints, has_unique_indexes);
 
 		if (return_chunk) {
 			// Collect RETURNING rows per-thread, merge into global in Combine()
@@ -98,9 +99,6 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 
 	auto &row_ids = chunk.data[row_id_index];
 	row_ids.Flatten();
-
-	// With unique indexes, the deleted rows are appended to the delete indexes below.
-	l_state.delete_state->maintains_delete_indexes = g_state.has_unique_indexes;
 
 	// Fast path: no RETURNING and no unique indexes
 	if (!return_chunk && !g_state.has_unique_indexes) {
@@ -261,7 +259,9 @@ unique_ptr<GlobalSinkState> PhysicalDelete::GetGlobalSinkState(ClientContext &co
 }
 
 unique_ptr<LocalSinkState> PhysicalDelete::GetLocalSinkState(ExecutionContext &context) const {
-	return make_uniq<DeleteLocalState>(context.client, tableref, bound_constraints, GetTypes(), return_chunk);
+	auto &g_state = sink_state->Cast<DeleteGlobalState>();
+	return make_uniq<DeleteLocalState>(context.client, tableref, bound_constraints, GetTypes(), return_chunk,
+	                                   g_state.has_unique_indexes);
 }
 
 //===--------------------------------------------------------------------===//

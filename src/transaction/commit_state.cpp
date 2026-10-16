@@ -118,15 +118,9 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 
 	// Indexes covered by the delete-merge were already handled at flush: only stamp versions for them.
 	optional_ptr<const reference_set_t<IndexEntry>> covered_entries;
-	if (removal_type != IndexRemovalType::DELETED_ROWS_IN_USE) {
-		auto merge_state = transaction.TryGetDeleteMergeState();
-		if (merge_state && !merge_state->CoveredEntries().empty()) {
-			covered_entries = &merge_state->CoveredEntries();
-		}
-	}
-	if (covered_entries && table.GetDataTableInfo()->GetIndexes().AllCovered(*covered_entries)) {
-		// every index of the table was covered: skip the row fetch entirely
-		return;
+	auto merge_state = transaction.TryGetDeleteMergeState();
+	if (merge_state && !merge_state->CoveredEntries().empty()) {
+		covered_entries = &merge_state->CoveredEntries();
 	}
 
 	auto checkpoint_id = transaction.GetTransactionManager().Cast<DuckTransactionManager>().GetActiveCheckpoint();

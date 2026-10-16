@@ -1,0 +1,18 @@
+# name: benchmark/micro/index/commit/insert_fk_child.benchmark
+# description: Insert 10M rows into a FOREIGN KEY child table referencing 1M parent keys
+# group: [commit]
+
+name FK Child Insert
+group index
+
+load
+CREATE TABLE parent (id INTEGER PRIMARY KEY);
+INSERT INTO parent SELECT range::INTEGER FROM range(1000000);
+CREATE TABLE child (pid INTEGER REFERENCES parent (id));
+CREATE TABLE staging AS SELECT (range % 1000000)::INTEGER AS pid FROM range(10000000);
+
+run
+INSERT INTO child SELECT pid FROM staging;
+
+cleanup
+DELETE FROM child;

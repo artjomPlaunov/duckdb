@@ -155,3 +155,57 @@ DROP TABLE t;
 statement ok
 DROP TABLE multi;
 
+
+# the merge for different key types
+foreach type INTEGER BIGINT VARCHAR
+
+statement ok
+CREATE TABLE typed(i ${type} PRIMARY KEY, j INTEGER);
+
+statement ok
+INSERT INTO typed SELECT range::${type}, range % 10 FROM range(2000);
+
+statement ok
+DELETE FROM typed WHERE j < 5;
+
+query I
+SELECT count(*) FROM typed;
+----
+1000
+
+# re-insert the deleted keys
+statement ok
+INSERT INTO typed SELECT range::${type}, -1 FROM range(2000) WHERE range % 10 < 5;
+
+query I
+SELECT count(*) FROM typed;
+----
+2000
+
+# delete + reinsert of the same key within one transaction
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM typed WHERE i = 42::${type};
+
+statement ok
+INSERT INTO typed VALUES (42::${type}, -2);
+
+statement ok
+COMMIT;
+
+query I
+SELECT j FROM typed WHERE i = 42::${type};
+----
+-2
+
+statement error
+INSERT INTO typed VALUES (42::${type}, 0);
+----
+<REGEX>:Constraint Error.*
+
+statement ok
+DROP TABLE typed;
+
+endloop

@@ -22,6 +22,7 @@ class CollectionScanState;
 class ColumnDefinition;
 class DataChunk;
 class DataTable;
+class DataTableInfo;
 class DuckTableEntry;
 class DuckTransaction;
 class Expression;
@@ -209,12 +210,8 @@ public:
 	                const vector<StorageIndex> &bound_columns, Expression &cast_expr);
 
 	void MoveStorage(DataTable &old_dt, DataTable &new_dt);
-	//! Registers a committed-row delete; unmaintained deletes disable the delete-merge for the table.
-	void RegisterCommittedDelete(DataTable &table, bool maintains_delete_indexes);
-	//! Marks the delete index of a mid-transaction CREATE INDEX as incomplete if committed-row
-	//! deletes already happened, so the delete-merge skips it. The storage is passed directly:
-	//! an ALTER (e.g. ADD PRIMARY KEY) re-keys the storage map to a new DataTable.
-	void MarkNewDeleteIndex(DataTable &table, LocalTableStorage &storage, const IndexEntry &index_entry);
+	//! Marks the table's delete indexes incomplete, disabling the delete-merge for the table.
+	void MarkDeleteIndexesIncomplete(DataTable &table);
 	void FetchChunk(DataTable &table, const Vector &row_ids, idx_t count, const vector<StorageIndex> &col_ids,
 	                DataChunk &chunk, ColumnFetchState &fetch_state);
 	//! Returns true, if the local storage contains the row id.
@@ -241,19 +238,14 @@ private:
 	DuckTransaction &transaction;
 	LocalTableManager table_manager;
 	bool synced_flushed_blocks = false;
-	//! Tables with committed-row deletes in this transaction.
-	reference_set_t<DataTable> tables_with_committed_deletes;
-	//! Tables whose committed-row deletes bypassed the delete indexes.
-	reference_set_t<DataTable> tables_with_unmaintained_deletes;
-	//! Delete indexes created after committed-row deletes already happened.
-	reference_set_t<IndexEntry> incomplete_delete_entries;
+	//! Tables whose delete indexes missed committed-row deletes; keyed by the DataTableInfo,
+	//! which is stable across the DataTable replacements of ALTER.
+	reference_set_t<DataTableInfo> tables_with_incomplete_delete_indexes;
 
 private:
 	void Flush(DataTable &table, LocalTableStorage &storage, optional_ptr<StorageCommitState> commit_state);
 	//! Merges the local delete indexes of the table's unique indexes into the main indexes.
-	void DeleteMerge(DataTable &table, LocalTableStorage &storage);
-	//! Moves the delete-tracking of old_dt to new_dt when an ALTER replaces the DataTable.
-	void MigrateDeleteTracking(DataTable &old_dt, DataTable &new_dt);
+	void MergeDeleteIndexes(DataTable &table, LocalTableStorage &storage);
 };
 
 } // namespace duckdb

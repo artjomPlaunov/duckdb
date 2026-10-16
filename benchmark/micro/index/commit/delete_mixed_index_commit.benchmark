@@ -1,0 +1,19 @@
+# name: benchmark/micro/index/commit/delete_mixed_index_commit.benchmark
+# description: Commit a transaction deleting 5M of 10M rows from a table with a PRIMARY KEY and a plain ART index
+# group: [commit]
+
+name Mixed Index Delete Commit
+group index
+
+load
+CREATE TABLE t (pk INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t SELECT range::INTEGER, range::INTEGER FROM range(10000000);
+CREATE INDEX idx ON t USING ART(v);
+
+run
+BEGIN;
+DELETE FROM t WHERE pk < 5000000;
+COMMIT;
+
+cleanup
+INSERT INTO t SELECT range::INTEGER, range::INTEGER FROM range(5000000);

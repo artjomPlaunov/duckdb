@@ -192,8 +192,8 @@ SinkFinalizeType PhysicalCreateIndex::Finalize(Pipeline &pipeline, Event &event,
 	if (local_table_storage) {
 		// Existing transaction-local rows are verified when committing, so we only add a delete index.
 		index_entry->InitializeLocalDeleteIndex(local_table_storage->delete_indexes);
-		// The new delete index misses this transaction's earlier deletes: exclude it from the delete-merge.
-		local_storage.MarkNewDeleteIndex(storage, *local_table_storage, *index_entry);
+		// The new delete index may miss this transaction's earlier deletes: disable the delete-merge.
+		local_storage.MarkDeleteIndexesIncomplete(storage);
 	}
 
 	return SinkFinalizeType::READY;

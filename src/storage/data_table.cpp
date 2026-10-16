@@ -1309,13 +1309,15 @@ void DataTable::VerifyDeleteConstraints(optional_ptr<LocalTableStorage> storage,
 }
 
 unique_ptr<TableDeleteState> DataTable::InitializeDelete(TableCatalogEntry &table, ClientContext &context,
-                                                         const vector<unique_ptr<BoundConstraint>> &bound_constraints) {
+                                                         const vector<unique_ptr<BoundConstraint>> &bound_constraints,
+                                                         const bool maintains_delete_indexes) {
 	// Bind all indexes.
 	info->BindIndexes(context);
 
 	auto binder = Binder::CreateBinder(context);
 	vector<LogicalType> types;
 	auto result = make_uniq<TableDeleteState>();
+	result->maintains_delete_indexes = maintains_delete_indexes;
 	result->has_delete_constraints = TableHasDeleteConstraints(table);
 	if (result->has_delete_constraints) {
 		// initialize the chunk if there are any constraints to verify
@@ -1374,7 +1376,9 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 		}
 
 		// This is a regular DELETE.
-		local_storage.RegisterCommittedDelete(*this, state.maintains_delete_indexes);
+		if (!state.maintains_delete_indexes) {
+			local_storage.MarkDeleteIndexesIncomplete(*this);
+		}
 		if (state.has_delete_constraints) {
 			// Verify any delete constraints.
 			ColumnFetchState fetch_state;

@@ -23,14 +23,16 @@ class TableIndexList;
 class DeleteMergeState {
 public:
 	//! Merges the local delete indexes of a table's unique index entries into the main indexes.
-	void MergeTable(TableIndexList &indexes, TableIndexList &delete_indexes,
-	                const reference_set_t<IndexEntry> &incomplete_delete_entries, optional_idx active_checkpoint);
+	void MergeTable(TableIndexList &indexes, TableIndexList &delete_indexes, optional_idx active_checkpoint);
 	//! Returns the index entries whose removals were fully applied at flush.
 	const reference_set_t<IndexEntry> &CoveredEntries() const {
 		return covered;
 	}
-	//! Drops this transaction's deleted_rows_in_use copies after a successful commit.
+	//! Detaches the adopted delete indexes after a successful commit, or keeps them attached
+	//! for older snapshots until Cleanup when other transactions are alive.
 	void FinalizeCommit(ActiveTransactionState active_transactions);
+	//! Detaches any remaining adopted delete indexes once no snapshot can see the deleted rows.
+	void Cleanup();
 	//! Re-inserts the merged deletes into the main indexes after a failed commit.
 	void Revert(optional_idx active_checkpoint);
 
@@ -42,8 +44,6 @@ private:
 		shared_ptr<IndexEntry> delete_entry;
 		//! The number of merged (key, row id) pairs, in the delete index's key order.
 		idx_t merged_count = 0;
-		//! True if deleted_rows_in_use did not exist before the merge.
-		bool in_use_was_empty = false;
 	};
 	vector<DeleteMergeRecord> records;
 	reference_set_t<IndexEntry> covered;

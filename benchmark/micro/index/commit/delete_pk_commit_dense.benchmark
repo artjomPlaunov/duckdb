@@ -1,0 +1,18 @@
+# name: benchmark/micro/index/commit/delete_pk_commit_dense.benchmark
+# description: Commit a transaction deleting 5M of 10M rows with a dense sequential PRIMARY KEY
+# group: [commit]
+
+name PK Delete Commit (Dense)
+group index
+
+load
+CREATE TABLE t (pk INTEGER PRIMARY KEY);
+INSERT INTO t SELECT range::INTEGER FROM range(10000000);
+
+run
+BEGIN;
+DELETE FROM t WHERE pk < 5000000;
+COMMIT;
+
+cleanup
+INSERT INTO t SELECT range::INTEGER FROM range(5000000);

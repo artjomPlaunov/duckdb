@@ -185,40 +185,14 @@ void TableIndexList::RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, const 
 	}
 }
 
-bool TableIndexList::AllCovered(const reference_set_t<IndexEntry> &covered_entries) const {
-	annotated_lock_guard lock(index_entries_lock);
-	for (const auto &entry : index_entries) {
-		if (covered_entries.find(*entry) == covered_entries.end()) {
-			return false;
-		}
-	}
-	return true;
-}
-
 void TableIndexList::RemoveIndex(idx_t index_oid) {
-	shared_ptr<IndexEntry> removed_entry;
-	{
-		annotated_lock_guard lock(index_entries_lock);
-		for (idx_t i = 0; i < index_entries.size(); i++) {
-			auto &entry = index_entries[i];
-			if (entry->GetIndexOid() != index_oid) {
-				continue;
-			}
-			if (entry->GetBindState() != IndexBindState::BOUND) {
-				unbound_count--;
-			}
-			removed_entry = std::move(entry);
-			index_entries.erase_at(i);
-			break;
-		}
-	}
+	auto removed_entry = ExtractEntry(index_oid);
 	if (removed_entry) {
 		removed_entry->Retire();
 	}
 }
 
-shared_ptr<IndexEntry> TableIndexList::ExtractEntry(const IndexEntry &index) {
-	auto index_oid = index.GetIndexOid();
+shared_ptr<IndexEntry> TableIndexList::ExtractEntry(idx_t index_oid) {
 	annotated_lock_guard lock(index_entries_lock);
 	for (idx_t i = 0; i < index_entries.size(); i++) {
 		auto &entry = index_entries[i];

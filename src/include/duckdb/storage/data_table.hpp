@@ -157,7 +157,8 @@ public:
 	OptimisticDataWriter &GetOptimisticWriter(ClientContext &context);
 
 	unique_ptr<TableDeleteState> InitializeDelete(TableCatalogEntry &table, ClientContext &context,
-	                                              const vector<unique_ptr<BoundConstraint>> &bound_constraints);
+	                                              const vector<unique_ptr<BoundConstraint>> &bound_constraints,
+	                                              bool maintains_delete_indexes = false);
 	//! Delete the entries with the specified row identifier from the table
 	idx_t Delete(TableDeleteState &state, ClientContext &context, DuckTableEntry &table_entry, Vector &row_ids,
 	             idx_t count);

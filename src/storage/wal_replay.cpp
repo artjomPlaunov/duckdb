@@ -33,9 +33,11 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/single_file_block_manager.hpp"
 #include "duckdb/storage/storage_manager.hpp"
+#include "duckdb/common/unordered_map.hpp"
 #include "duckdb/storage/table/column_data.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/delete_state.hpp"
+#include "duckdb/storage/table/index_entry.hpp"
 #include "duckdb/storage/wal_entry.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
@@ -71,14 +73,19 @@ public:
 	vector<block_id_t> row_group_blocks;
 
 	struct ReplayIndexInfo {
-		ReplayIndexInfo(TableIndexList &index_list, unique_ptr<Index> index, idx_t table_oid, idx_t index_oid,
-		                ConstraintCheckMode check_mode)
-		    : index_list(index_list), index(std::move(index)), table_oid(table_oid), index_oid(index_oid),
+		ReplayIndexInfo(TableIndexList &index_list, unique_ptr<Index> index, DataTable &table_storage, idx_t table_oid,
+		                idx_t index_oid, ConstraintCheckMode check_mode)
+		    : index_list(index_list), index(std::move(index)), table_info(table_storage.GetDataTableInfo()),
+		      row_groups(table_storage.GetRowGroupCollection()), table_oid(table_oid), index_oid(index_oid),
 		      check_mode(check_mode) {
 		}
 
 		reference<TableIndexList> index_list;
 		unique_ptr<Index> index;
+		//! Shared table state used to strip the replayed transaction's deletes from the attached
+		//! index; the DataTable itself may be replaced (and freed) by an ALTER in the transaction.
+		shared_ptr<DataTableInfo> table_info;
+		shared_ptr<RowGroupCollection> row_groups;
 		//! The oid of the table, used to uniquely identify the table (even after a rename).
 		idx_t table_oid;
 		//! The oid of the index, used to match a DROP INDEX in the same replayed transaction.
@@ -87,6 +94,33 @@ public:
 		ConstraintCheckMode check_mode;
 	};
 	vector<ReplayIndexInfo> replay_index_infos;
+	//! Row ids deleted by the current replay transaction, per table. The WAL images of indexes created
+	//! in the same transaction were serialized before the commit removed these rows.
+	unordered_map<DataTableInfo *, unsafe_vector<row_t>> replay_transaction_deletes;
+
+	//! Removes the replayed transaction's deleted rows from a just-attached index.
+	//! Unbound indexes buffer the removal; it applies when the index is first bound.
+	void StripTransactionDeletes(ClientContext &strip_context, DataTableInfo &table_info,
+	                             RowGroupCollection &row_groups, IndexEntry &index_entry) {
+		auto deletes = replay_transaction_deletes.find(&table_info);
+		if (deletes == replay_transaction_deletes.end() || deletes->second.empty()) {
+			return;
+		}
+		// Every other index already had these rows removed at the replay commit.
+		reference_set_t<IndexEntry> covered_entries;
+		for (auto entry : table_info.GetIndexes().IndexEntries()) {
+			if (entry.get() != &index_entry) {
+				covered_entries.insert(*entry);
+			}
+		}
+		auto &row_ids = deletes->second;
+		for (idx_t pos = 0; pos < row_ids.size(); pos += STANDARD_VECTOR_SIZE) {
+			auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, row_ids.size() - pos);
+			Vector row_id_vector(LogicalType::ROW_TYPE, data_ptr_cast(&row_ids[pos]), count);
+			row_groups.RemoveFromIndexes(QueryContext(strip_context), table_info.GetIndexes(), row_id_vector, count,
+			                             IndexRemovalType::MAIN_INDEX_ONLY, optional_idx(), &covered_entries);
+		}
+	}
 };
 
 class WriteAheadLogDeserializer {
@@ -663,11 +697,15 @@ unique_ptr<WriteAheadLog> WriteAheadLogReplayer::ReplayLog(unique_ptr<FileHandle
 			if (deserializer.ReplayEntry()) {
 				con.Commit();
 
-				// Commit any outstanding indexes.
+				// Commit any outstanding indexes. Their images were serialized before the creating
+				// transaction's commit removed its deleted rows: strip those rows after attaching.
 				for (auto &info : state.replay_index_infos) {
-					info.index_list.get().AddIndex(std::move(info.index), info.index_oid, info.check_mode);
+					auto index_entry =
+					    info.index_list.get().AddIndex(std::move(info.index), info.index_oid, info.check_mode);
+					state.StripTransactionDeletes(*con.context, *info.table_info, *info.row_groups, *index_entry);
 				}
 				state.replay_index_infos.clear();
+				state.replay_transaction_deletes.clear();
 
 				successful_offset = wal_reader.CurrentOffset();
 				// check if the file is exhausted or all committed entries were replayed
@@ -1018,7 +1056,7 @@ void WriteAheadLogDeserializer::ReplayAlter() {
 	auto index_oid = DatabaseManager::Get(context).NextOid();
 	unique_info.SetBackingIndexOid(index_oid);
 	catalog.Alter(context, alter_info);
-	state.replay_index_infos.emplace_back(table_index_list, std::move(index_instance), table.oid, index_oid,
+	state.replay_index_infos.emplace_back(table_index_list, std::move(index_instance), storage, table.oid, index_oid,
 	                                      unique_info.check_mode);
 }
 
@@ -1264,8 +1302,8 @@ void WriteAheadLogDeserializer::ReplayCreateIndex() {
 	auto unbound_index = make_uniq<UnboundIndex>(std::move(create_info), std::move(index_info), io_manager, db);
 
 	auto &table_index_list = storage.GetDataTableInfo()->GetIndexes();
-	state.replay_index_infos.emplace_back(table_index_list, std::move(unbound_index), table.oid, index_entry->oid,
-	                                      ConstraintCheckMode::DEFAULT);
+	state.replay_index_infos.emplace_back(table_index_list, std::move(unbound_index), storage, table.oid,
+	                                      index_entry->oid, ConstraintCheckMode::DEFAULT);
 }
 
 void WriteAheadLogDeserializer::ReplayDropIndex() {
@@ -1389,6 +1427,12 @@ void WriteAheadLogDeserializer::ReplayDelete() {
 	}
 	TableDeleteState delete_state;
 	storage.Delete(delete_state, context, *state.current_table, row_identifiers, chunk.size());
+
+	// Record the deletes: indexes attached at the end of this transaction must strip these rows.
+	auto &deleted_rows = state.replay_transaction_deletes[storage.GetDataTableInfo().get()];
+	for (idx_t i = 0; i < chunk.size(); i++) {
+		deleted_rows.push_back(source_ids[i]);
+	}
 }
 
 void WriteAheadLogDeserializer::ReplayUpdate() {

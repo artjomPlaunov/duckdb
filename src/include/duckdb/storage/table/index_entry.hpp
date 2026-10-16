@@ -46,8 +46,13 @@ public:
 	bool ShouldUse(optional_idx active_checkpoint) const;
 	ErrorData MergeCheckpointDeltas(BoundIndex &index);
 	void MarkWritten(optional_idx checkpoint_id);
-	void Drop(IndexDeltaType type);
 	void Reset();
+	//! Attaches a committing transaction's delete index as a scan overlay for the merged-out rows.
+	void Adopt(shared_ptr<IndexEntry> delete_entry);
+	void Unadopt(const IndexEntry &delete_entry);
+	const vector<shared_ptr<IndexEntry>> &AdoptedDeletes() const {
+		return adopted_deletes;
+	}
 
 private:
 	const unique_ptr<BoundIndex> &GetPointer(IndexDeltaType type) const;
@@ -61,6 +66,7 @@ private:
 
 	unique_ptr<BoundIndex> deleted_rows_in_use;
 	CheckpointDeltas checkpoint;
+	vector<shared_ptr<IndexEntry>> adopted_deletes;
 };
 
 //! IndexReadHandle provides shared access to a stable physical index.
@@ -76,6 +82,9 @@ public:
 
 	optional_ptr<const TARGET> FindDelta(IndexDeltaType type) const &;
 	optional_ptr<const TARGET> FindDelta(IndexDeltaType type) const && = delete;
+
+	vector<reference<const TARGET>> AdoptedDeltas() const &;
+	vector<reference<const TARGET>> AdoptedDeltas() const && = delete;
 
 private:
 	friend class IndexEntry;
@@ -181,15 +190,14 @@ public:
 	void InitializeLocalIndexes(TableIndexList &delete_indexes, TableIndexList &append_indexes) const;
 	//! Adds only the transaction-local delete index.
 	void InitializeLocalDeleteIndex(TableIndexList &delete_indexes) const;
-	//! Merges a transaction-local delete index into the physical index: each batch is copied into
-	//! deleted_rows_in_use, then deleted from the main index. Updates merged_count per batch so a failed
-	//! commit can revert exactly the applied entries. Returns true if the merge completed.
-	bool MergeLocalDeletes(IndexEntry &delete_entry, optional_idx active_checkpoint, idx_t &merged_count,
-	                       bool &in_use_was_empty);
+	//! Merges a transaction-local delete index into the physical index, batch by batch.
+	//! The delete index is adopted as a scan overlay first, so older snapshots keep finding the rows.
+	bool MergeLocalDeletes(const shared_ptr<IndexEntry> &delete_entry, optional_idx active_checkpoint,
+	                       idx_t &merged_count);
 	//! Reverts the first merged_count entries of a local delete-merge after a failed commit.
 	void RevertLocalDeleteMerge(IndexEntry &delete_entry, idx_t merged_count, optional_idx active_checkpoint);
-	//! Drops the first merged_count entries of a merged delete index from deleted_rows_in_use.
-	void FinalizeLocalDeleteMerge(IndexEntry &delete_entry, idx_t merged_count, bool in_use_was_empty);
+	//! Detaches an adopted delete index once no snapshot needs the merged-out rows.
+	void DetachLocalDeleteMerge(const IndexEntry &delete_entry);
 
 public:
 	//! Acquire shared access to a stable physical index.
@@ -270,6 +278,15 @@ optional_ptr<const TARGET> IndexReadHandle<TARGET>::FindDelta(IndexDeltaType typ
 		return nullptr;
 	}
 	return index->template Cast<TARGET>();
+}
+
+template <class TARGET>
+vector<reference<const TARGET>> IndexReadHandle<TARGET>::AdoptedDeltas() const & {
+	vector<reference<const TARGET>> result;
+	for (auto &adopted : GetEntry().deltas.AdoptedDeletes()) {
+		result.push_back(adopted->owned_index->template Cast<TARGET>());
+	}
+	return result;
 }
 
 template <class TARGET>

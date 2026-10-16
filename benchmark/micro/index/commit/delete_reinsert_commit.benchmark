@@ -1,0 +1,16 @@
+# name: benchmark/micro/index/commit/delete_reinsert_commit.benchmark
+# description: Delete 5M PRIMARY KEY rows and reinsert the same keys in one transaction, then commit
+# group: [commit]
+
+name PK Delete-Reinsert Commit
+group index
+
+load
+CREATE TABLE t (pk INTEGER PRIMARY KEY);
+INSERT INTO t SELECT range::INTEGER FROM range(10000000);
+
+run
+BEGIN;
+DELETE FROM t WHERE pk < 5000000;
+INSERT INTO t SELECT range::INTEGER FROM range(5000000);
+COMMIT;

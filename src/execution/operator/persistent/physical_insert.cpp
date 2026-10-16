@@ -280,8 +280,8 @@ static idx_t PerformOnConflictAction(InsertLocalState &lstate, InsertGlobalState
 	}
 
 	if (GLOBAL) {
+		// Not maintaining the delete indexes: this path only has the updated values, not the old rows.
 		auto &delete_state = lstate.GetDeleteState(data_table, table, context.client);
-		// maintains_delete_indexes stays false: the delete indexes receive the updated values, not the old rows.
 		data_table.Delete(delete_state, context.client, table, row_ids, update_chunk.size());
 	} else {
 		auto &local_storage = LocalStorage::Get(context.client, data_table.db);

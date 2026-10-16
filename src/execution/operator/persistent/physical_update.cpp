@@ -105,9 +105,10 @@ public:
 	unique_ptr<TableUpdateState> update_state;
 	const vector<unique_ptr<BoundConstraint>> &bound_constraints;
 
-	TableDeleteState &GetDeleteState(DataTable &table, TableCatalogEntry &tableref, ClientContext &context) {
+	TableDeleteState &GetDeleteState(DataTable &table, TableCatalogEntry &tableref, ClientContext &context,
+	                                 bool maintains_delete_indexes) {
 		if (!delete_state) {
-			delete_state = table.InitializeDelete(tableref, context, bound_constraints);
+			delete_state = table.InitializeDelete(tableref, context, bound_constraints, maintains_delete_indexes);
 		}
 		return *delete_state;
 	}
@@ -254,9 +255,8 @@ SinkResultType PhysicalUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		table.Fetch(transaction, delete_chunk, column_ids, del_row_ids, update_count, fetch_state);
 	}
 
-	auto &delete_state = l_state.GetDeleteState(table, tableref, context.client);
 	// Only an index update fetches the old rows, so only then are the delete indexes filled correctly.
-	delete_state.maintains_delete_indexes = index_update;
+	auto &delete_state = l_state.GetDeleteState(table, tableref, context.client, index_update);
 	table.Delete(delete_state, context.client, tableref, del_row_ids, update_count);
 
 	// Arrange the columns in the standard table order, then validate + set the cardinality from the referenced

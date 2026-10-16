@@ -322,9 +322,7 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 			commit_info.wal_sync_offset = commit_state->FlushCommit(sync_now);
 		}
 		if (delete_merge_state) {
-			// The commit can no longer fail: drop the deleted_rows_in_use copies if no one needs them.
-			// Like drop_state below, a failure here reverts a commit whose WAL marker is already
-			// flushed (the pre-existing durable-but-reported-failed window).
+			// The commit can no longer fail: detach the adopted delete indexes if no one needs them.
 			delete_merge_state->FinalizeCommit(commit_info.active_transactions);
 		}
 		drop_state.FinalizeCommit();
@@ -379,6 +377,10 @@ ErrorData DuckTransaction::Rollback() {
 
 void DuckTransaction::Cleanup(VisibilityBound lowest_visibility_bound) {
 	undo_buffer.Cleanup(lowest_visibility_bound);
+	if (delete_merge_state) {
+		// No snapshot can see the merged-out rows anymore: detach the adopted delete indexes.
+		delete_merge_state->Cleanup();
+	}
 }
 
 void DuckTransaction::SetModifications(DatabaseModificationType type) {

@@ -1,0 +1,79 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_overlays.test
+# description: Adopted delete indexes stack across commits and detach once no snapshot needs them
+# group: [delete_merge]
+
+statement ok
+SET immediate_transaction_mode=true;
+
+statement ok
+CREATE TABLE t(i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok con1
+INSERT INTO t SELECT range, range FROM range(10000);
+
+# con2's snapshot predates both deleting transactions
+statement ok con2
+BEGIN;
+
+query I con2
+SELECT count(*) FROM t;
+----
+10000
+
+# two committed delete transactions stack two adopted delete indexes on the same index
+statement ok con1
+DELETE FROM t WHERE i < 2000;
+
+statement ok con1
+DELETE FROM t WHERE i >= 2000 AND i < 4000;
+
+query I con2
+SELECT count(*) FROM t WHERE i >= 0 AND i < 4000;
+----
+4000
+
+query II con2
+SELECT i, j FROM t WHERE i = 1500;
+----
+1500	1500
+
+query II con2
+SELECT i, j FROM t WHERE i = 2500;
+----
+2500	2500
+
+# con1 re-inserts a deleted key: con2 sees exactly the old version, once
+statement ok con1
+INSERT INTO t VALUES (5, -1);
+
+query II con2
+SELECT i, j FROM t WHERE i = 5;
+----
+5	5
+
+query I con1
+SELECT j FROM t WHERE i = 5;
+----
+-1
+
+statement ok con2
+COMMIT;
+
+# the overlays detach once no snapshot needs them: scans and re-inserts behave normally
+query I con2
+SELECT count(*) FROM t;
+----
+6001
+
+statement ok con2
+INSERT INTO t SELECT range, -1 FROM range(4000) WHERE range != 5;
+
+query I con1
+SELECT count(*) FROM t;
+----
+10000
+
+statement error con1
+INSERT INTO t VALUES (3999, 0);
+----
+<REGEX>:Constraint Error.*
