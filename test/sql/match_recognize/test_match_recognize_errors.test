@@ -28,9 +28,9 @@ SELECT 1 FROM q MATCH_RECOGNIZE(MEASURES i AS x DEFINE A as true)
 ----
 <REGEX>:Parser Error.*requires a PATTERN clause.*
 
-# a variable with no condition matches any row, so DEFINE may be left out entirely
+# a variable with no condition matches any row, but the DEFINE clause itself has to be there
 query I
-SELECT count(*) FROM q MATCH_RECOGNIZE(MEASURES count(*) AS n ONE ROW PER MATCH PATTERN (A))
+SELECT count(*) FROM q MATCH_RECOGNIZE(MEASURES count(*) AS n ONE ROW PER MATCH PATTERN (A) DEFINE A AS true)
 ----
 2
 
@@ -42,7 +42,7 @@ SELECT count(*) FROM q MATCH_RECOGNIZE(ORDER BY i ALL ROWS PER MATCH PATTERN (A)
 
 # with neither, the pattern's shape alone decides the match
 query I
-SELECT count(*) FROM q MATCH_RECOGNIZE(ORDER BY i ALL ROWS PER MATCH PATTERN (A B))
+SELECT count(*) FROM q MATCH_RECOGNIZE(ORDER BY i ALL ROWS PER MATCH PATTERN (A B) DEFINE A AS true)
 ----
 2
 
@@ -163,31 +163,39 @@ SELECT 1 FROM q MATCH_RECOGNIZE(
 ----
 <REGEX>:Binder Error:.*SUBSET name "A" is already a pattern variable.*
 
-# a union stands for a set of rows, which the matcher cannot navigate or skip to while matching
+# a measure is a column of the output, and a table does not have two columns of one name
 statement error
 SELECT 1 FROM q MATCH_RECOGNIZE(
-    ORDER BY i MEASURES count(*) AS n ONE ROW PER MATCH
-    PATTERN (A B+) SUBSET U = (A, B) DEFINE B AS LAST(U.j) > 0
+    ORDER BY i MEASURES count(*) AS n, sum(j) AS n ONE ROW PER MATCH PATTERN (A+) DEFINE A AS j > 0
 )
 ----
-<REGEX>:Not implemented Error:.*SUBSET variable cannot be referenced in DEFINE.*
+<REGEX>:Binder Error:.*MEASURES names "n" twice.*
+
+# an aggregate reads many rows and a navigation reads one, so one inside the other has no reading
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES sum(PREV(A.j)) AS s ONE ROW PER MATCH PATTERN (A+) DEFINE A AS j > 0
+)
+----
+<REGEX>:Binder Error:.*SUM\(\) aggregates the rows of the match, so a row pattern navigation cannot be nested.*
 
 statement error
 SELECT 1 FROM q MATCH_RECOGNIZE(
-    ORDER BY i MEASURES count(*) AS n ONE ROW PER MATCH AFTER MATCH SKIP TO LAST U
-    PATTERN (A B+) SUBSET U = (A, B) DEFINE B AS B.j > 0
+    ORDER BY i MEASURES max(LAST(A.j)) AS s ONE ROW PER MATCH PATTERN (A+) DEFINE A AS j > 0
 )
 ----
-<REGEX>:Not implemented Error:.*AFTER MATCH SKIP TO a SUBSET variable.*
+<REGEX>:Binder Error:.*MAX\(\) aggregates the rows of the match, so a row pattern navigation cannot be nested.*
 
-# an exclusion decides which of a match's rows reach the output, so it needs rows in the output
-statement error
-SELECT 1 FROM q MATCH_RECOGNIZE(
+# An exclusion decides which of a match's rows reach the output. ONE ROW PER MATCH reports the
+# match rather than its rows, so it is accepted there and simply has no effect - Trino and Oracle
+# both take it too.
+query I
+SELECT n FROM q MATCH_RECOGNIZE(
     ORDER BY i MEASURES count(*) AS n ONE ROW PER MATCH
     PATTERN ({- A -} B+) DEFINE B AS B.j > 0
 )
 ----
-<REGEX>:Binder Error:.*exclusion syntax \{- -\} requires ALL ROWS PER MATCH.*
+2
 
 # the clauses may be written in any order, and each may appear only once
 query I
@@ -294,11 +302,12 @@ SELECT 1 FROM q MATCH_RECOGNIZE(MEASURES i AS x PATTERN (A) DEFINE A as FIRST(no
 ----
 <REGEX>:Binder Error.*nosuchcol.*
 
-# a navigation over something a condition may not contain reports that, not the navigation
+# A navigation reads one row of the match and an aggregate reads many, so one inside the other has no
+# reading. The message names the aggregate rather than the navigation, which is what went wrong.
 statement error
 SELECT 1 FROM q MATCH_RECOGNIZE(MEASURES i AS x PATTERN (A) DEFINE A as FIRST(sum(i)) > 0)
 ----
-<REGEX>:Binder Error.*cannot be an aggregate.*
+<REGEX>:Binder Error.*aggregate reads the rows of the match.*navigation.*
 
 # ONE ROW PER MATCH reports the match rather than its rows, so its columns are what the match was
 # partitioned by and what was measured. With neither there is nothing to return, which is worth
@@ -407,14 +416,6 @@ SELECT "match_recognize"(1) OVER ()
 ----
 <REGEX>:Binder Error:.*cannot be used directly.*
 
-# what a condition cannot be
-statement error
-FROM (VALUES (10), (20)) t(x) MATCH_RECOGNIZE (
-    ORDER BY x MEASURES count(*) AS n PATTERN (A+) DEFINE A AS sum(x) > 0
-)
-----
-cannot be an aggregate
-
 statement error
 FROM (VALUES (10), (20)) t(x) MATCH_RECOGNIZE (
     ORDER BY x MEASURES count(*) AS n PATTERN (A+) DEFINE A AS x > (SELECT 1)
@@ -422,12 +423,14 @@ FROM (VALUES (10), (20)) t(x) MATCH_RECOGNIZE (
 ----
 may not contain a subquery
 
-statement error
+# CLASSIFIER() navigated in a condition reads the classifier of the row navigated to; the last row
+# mapped so far is the one being tested, which is the variable being defined
+query I
 FROM (VALUES (10), (20)) t(x) MATCH_RECOGNIZE (
     ORDER BY x MEASURES count(*) AS n PATTERN (A+) DEFINE A AS LAST(CLASSIFIER()) = 'A'
 )
 ----
-CLASSIFIER() only means something while the matcher is assembling a match
+2
 
 statement error
 FROM (VALUES (10), (20)) t(x) MATCH_RECOGNIZE (
@@ -441,14 +444,14 @@ Nested row pattern navigation is not supported
 statement error
 FROM (VALUES (1), (2)) t(x) MATCH_RECOGNIZE (
     ORDER BY x MEASURES count(*) AS n AFTER MATCH SKIP TO FIRST Z PATTERN (A B)
-)
+ DEFINE A AS true)
 ----
 not a pattern variable
 
 query I
 FROM (VALUES (1), (2), (3), (4)) t(x) MATCH_RECOGNIZE (
     ORDER BY x MEASURES count(*) AS n AFTER MATCH SKIP TO LAST B PATTERN (A B)
-)
+ DEFINE A AS true)
 ----
 2
 2
@@ -470,3 +473,206 @@ FROM (VALUES (1), (2)) t(x) MATCH_RECOGNIZE (
 ----
 1
 1
+
+# WITH UNMATCHED ROWS is there to report every row and {- -} is there to drop some: a row it dropped
+# is one a match did cover, so reporting it as unmatched would say the opposite.
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES count(*) AS n ALL ROWS PER MATCH WITH UNMATCHED ROWS
+    PATTERN ({- A -} A) DEFINE A as i > 0
+)
+----
+<REGEX>:Binder Error:.*not allowed with ALL ROWS PER MATCH WITH UNMATCHED ROWS.*
+
+# A union row pattern variable is a union of pattern variables, so a SUBSET may not be built out of
+# another SUBSET however few members that one has - Trino and Oracle refuse both spellings too.
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    MEASURES i AS x PATTERN (A B C) SUBSET U = (A, B), V = (U, C)
+    DEFINE A as true
+)
+----
+<REGEX>:Binder Error:.*which is itself a SUBSET.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    MEASURES i AS x PATTERN (A B C) SUBSET U = (A), V = (U, C)
+    DEFINE A as true
+)
+----
+<REGEX>:Binder Error:.*which is itself a SUBSET.*
+
+# A quantifier that allows at most zero repetitions matches nothing at all, which the pattern algebra
+# has the empty pattern () for: {n} takes n > 0, {n,m} takes 0 < m, {,m} takes m > 0
+# (ISO/IEC 19075-5 4.14.1). Trino and Oracle refuse these too.
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(MEASURES i AS x PATTERN (A{0} B) DEFINE A as true, B as true)
+----
+<REGEX>:Parser Error.*upper bound must be at least 1.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(MEASURES i AS x PATTERN (A{,0} B) DEFINE A as true, B as true)
+----
+<REGEX>:Parser Error.*upper bound must be at least 1.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(MEASURES i AS x PATTERN (A{0,0} B) DEFINE A as true, B as true)
+----
+<REGEX>:Parser Error.*upper bound must be at least 1.*
+
+# a lower bound of zero is fine where the upper bound allows a repetition
+query I
+SELECT count(*) FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES count(*) AS n PATTERN (A{0,} B) DEFINE A as i > 900, B as true
+)
+----
+2
+
+# An aggregate or a navigation reads one set of rows. A reference qualified with a pattern variable
+# names that variable's rows; an unqualified one names the universal row pattern variable, the whole
+# match. Asking for both at once names two sets, which ISO/IEC 19075-5 5.2 and 5.9 call a syntax
+# error - Trino and Oracle refuse all of these. Left alone, DuckDB silently answered as if the
+# unqualified reference had carried the same qualifier as the other one.
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES sum(i + A.j) AS s PATTERN (A B+) DEFINE A as i = 1
+)
+----
+<REGEX>:Binder Error:.*sum\(\) reads the rows of "A", so "i" cannot also read the whole match.*
+
+statement error
+SELECT 1 FROM q qt MATCH_RECOGNIZE(
+    ORDER BY i MEASURES sum(qt.i + A.j) AS s PATTERN (A B+) DEFINE A as i = 1
+)
+----
+<REGEX>:Binder Error:.*so "qt.i" cannot also read the whole match.*
+
+# CLASSIFIER() with nothing in front of it is the universal variable too (5.9 gives exactly this
+# example), while an aggregate over CLASSIFIER() alone reads the whole match and is fine
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES list(CLASSIFIER() || A.i::VARCHAR) AS s PATTERN (A B+) DEFINE A as i = 1
+)
+----
+<REGEX>:Binder Error:.*so CLASSIFIER\(\) cannot also read the whole match.*
+
+query I
+SELECT s FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES list(CLASSIFIER()) AS s PATTERN (A B+) DEFINE A as i = 1
+)
+----
+[A, B]
+
+# the rule holds for what decides which rows the aggregate sees, and in which order, because those
+# read the same rows the arguments do
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES sum(A.i) FILTER (WHERE j > 0) AS s PATTERN (A B+) DEFINE A as i = 1
+)
+----
+<REGEX>:Binder Error:.*so "j" cannot also read the whole match.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES list(A.i ORDER BY j) AS s PATTERN (A B+) DEFINE A as i = 1
+)
+----
+<REGEX>:Binder Error:.*so "j" cannot also read the whole match.*
+
+# FIRST() and LAST() read a row of the match, so they read one set of rows as well - in MEASURES and
+# in DEFINE alike
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES FIRST(i + A.j) AS s PATTERN (A B+) DEFINE A as i = 1
+)
+----
+<REGEX>:Binder Error:.*FIRST\(\) reads the rows of "A", so "i" cannot also read the whole match.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES count(*) AS n
+    PATTERN (A B+) DEFINE A as i = 1, B as B.j > LAST(A.j + i)
+)
+----
+<REGEX>:Binder Error:.*LAST\(\) reads the rows of "A", so "i" cannot also read the whole match.*
+
+# a reference the input cannot answer is the surrounding query's, the same value on every row of the
+# match, so it sits alongside a qualified one without naming a second set of rows
+query I
+SELECT (
+    SELECT s FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES sum(A.i + o.k) AS s PATTERN (A B+) DEFINE A as i = 1)
+) FROM (VALUES (100)) o(k)
+----
+101
+
+# A step is a fixed distance through the ordered partition, so its offset "is required to be a
+# run-time constant (literal, embedded variable, and the like, but not a column or a subquery). There
+# is an exception if the value of the offset is negative or null" (ISO/IEC 19075-5 5.6.2). Taken
+# through to the window function underneath, a negative offset stepped the other way instead - so
+# NEXT(x, -1) quietly answered what PREV(x, 1) does - and a column stepped a different distance on
+# every row. Trino and Oracle refuse all three; FIRST() and LAST() already did.
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES PREV(i, -1) AS s PATTERN (A+) DEFINE A as true)
+----
+<REGEX>:Binder Error:.*offset of PREV\(\) must be a non-negative integer.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES NEXT(i, -1) AS s PATTERN (A+) DEFINE A as true)
+----
+<REGEX>:Binder Error:.*offset of NEXT\(\) must be a non-negative integer.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES PREV(i, NULL) AS s PATTERN (A+) DEFINE A as true)
+----
+<REGEX>:Binder Error:.*offset of PREV\(\) must be a non-negative integer, not NULL.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES PREV(i, j) AS s PATTERN (A+) DEFINE A as true)
+----
+<REGEX>:Binder Error:.*offset of PREV\(\) must be a constant.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES count(*) AS n PATTERN (A+) DEFINE A as PREV(i, -1) > 0)
+----
+<REGEX>:Binder Error:.*offset of PREV\(\) must be a non-negative integer.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES count(*) AS n PATTERN (A+) DEFINE A as NEXT(i, j) > 0)
+----
+<REGEX>:Binder Error:.*offset of NEXT\(\) must be a constant.*
+
+# zero is a step that stays where it is, which the standard spells out as PREV(x, 0) being x itself
+query II
+SELECT s, t FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES PREV(i, 0) AS s, NEXT(i, 0) AS t PATTERN (A+) DEFINE A as true
+)
+----
+2	2
+
+# A step starts from a row the match names - the current one, or the one a pattern variable denotes.
+# A step inside a step names no such row, and ISO/IEC 19075-5 5.6.4 only nests FIRST and LAST within
+# PREV or NEXT, never a step within a step. Trino refuses it too.
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES PREV(PREV(i)) AS s PATTERN (A+) DEFINE A as true)
+----
+<REGEX>:Binder Error:.*PREV\(\) steps from a row the match names.*cannot be nested.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(ORDER BY i MEASURES PREV(NEXT(A.i)) AS s PATTERN (A+) DEFINE A as true)
+----
+<REGEX>:Binder Error:.*PREV\(\) steps from a row the match names.*cannot be nested.*
+
+statement error
+SELECT 1 FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES count(*) AS n PATTERN (A+) DEFINE A as NEXT(PREV(i)) > 0
+)
+----
+<REGEX>:Binder Error:.*NEXT\(\) steps from a row the match names.*cannot be nested.*
+
+# FIRST or LAST inside a step is the nesting the standard does define, so it stays accepted
+query I
+SELECT s FROM q MATCH_RECOGNIZE(
+    ORDER BY i MEASURES NEXT(LAST(A.i), 0) AS s PATTERN (A+) DEFINE A as true
+)
+----
+2
