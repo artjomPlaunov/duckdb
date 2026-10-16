@@ -173,11 +173,26 @@ void TableIndexList::AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids) {
 }
 
 void TableIndexList::RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, const IndexRemovalType removal_type,
-                                       const optional_idx active_checkpoint) {
+                                       const optional_idx active_checkpoint,
+                                       optional_ptr<const reference_set_t<IndexEntry>> covered_entries) {
 	annotated_lock_guard lock(index_entries_lock);
 	for (const auto &entry : index_entries) {
+		if (covered_entries && covered_entries->find(*entry) != covered_entries->end()) {
+			// Already removed by the delete-merge at flush.
+			continue;
+		}
 		entry->RemoveFromIndex(chunk, row_ids, removal_type, active_checkpoint);
 	}
+}
+
+bool TableIndexList::AllCovered(const reference_set_t<IndexEntry> &covered_entries) const {
+	annotated_lock_guard lock(index_entries_lock);
+	for (const auto &entry : index_entries) {
+		if (covered_entries.find(*entry) == covered_entries.end()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 void TableIndexList::RemoveIndex(idx_t index_oid) {
@@ -200,6 +215,24 @@ void TableIndexList::RemoveIndex(idx_t index_oid) {
 	if (removed_entry) {
 		removed_entry->Retire();
 	}
+}
+
+shared_ptr<IndexEntry> TableIndexList::ExtractEntry(const IndexEntry &index) {
+	auto index_oid = index.GetIndexOid();
+	annotated_lock_guard lock(index_entries_lock);
+	for (idx_t i = 0; i < index_entries.size(); i++) {
+		auto &entry = index_entries[i];
+		if (entry->GetIndexOid() != index_oid) {
+			continue;
+		}
+		if (entry->GetBindState() != IndexBindState::BOUND) {
+			unbound_count--;
+		}
+		auto extracted = std::move(entry);
+		index_entries.erase_at(i);
+		return extracted;
+	}
+	return nullptr;
 }
 
 bool TableIndexList::HasUniqueIndexes() const {
@@ -489,10 +522,14 @@ void TableIndexList::VerifyForeignKey(optional_ptr<const TableIndexList> delete_
 	entry->VerifyForeignKey(delete_entry, chunk, conflict_manager);
 }
 
-unordered_set<column_t> TableIndexList::GetIndexedColumns() const {
+unordered_set<column_t>
+TableIndexList::GetIndexedColumns(optional_ptr<const reference_set_t<IndexEntry>> covered_entries) const {
 	annotated_lock_guard lock(index_entries_lock);
 	unordered_set<column_t> column_ids;
 	for (const auto &entry : index_entries) {
+		if (covered_entries && covered_entries->find(*entry) != covered_entries->end()) {
+			continue;
+		}
 		auto index_info = entry->GetStorageInfo();
 		column_ids.insert(index_info.column_set.begin(), index_info.column_set.end());
 	}

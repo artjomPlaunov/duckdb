@@ -5,8 +5,6 @@
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/duck_schema_entry.hpp"
 #include "duckdb/catalog/catalog_entry/trigger_catalog_entry.hpp"
-#include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
-#include "duckdb/catalog/catalog_entry/type_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/view_catalog_entry.hpp"
 #include "duckdb/catalog/catalog_entry/dependency/dependency_entry.hpp"
 #include "duckdb/catalog/duck_catalog.hpp"
@@ -22,10 +20,12 @@
 #include "duckdb/transaction/append_info.hpp"
 #include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/transaction/update_info.hpp"
+#include "duckdb/transaction/delete_merge_state.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/storage/data_table.hpp"
-#include "duckdb/common/types/data_chunk.hpp"
+#include "duckdb/storage/table/data_table_info.hpp"
+#include "duckdb/common/types/vector.hpp"
 
 namespace duckdb {
 
@@ -116,12 +116,25 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 	// set up the row identifiers vector
 	Vector row_identifiers(LogicalType::ROW_TYPE, data_ptr_cast(row_numbers), count);
 
+	// Indexes covered by the delete-merge were already handled at flush: only stamp versions for them.
+	optional_ptr<const reference_set_t<IndexEntry>> covered_entries;
+	if (removal_type != IndexRemovalType::DELETED_ROWS_IN_USE) {
+		auto merge_state = transaction.TryGetDeleteMergeState();
+		if (merge_state && !merge_state->CoveredEntries().empty()) {
+			covered_entries = &merge_state->CoveredEntries();
+		}
+	}
+	if (covered_entries && table.GetDataTableInfo()->GetIndexes().AllCovered(*covered_entries)) {
+		// every index of the table was covered: skip the row fetch entirely
+		return;
+	}
+
 	auto checkpoint_id = transaction.GetTransactionManager().Cast<DuckTransactionManager>().GetActiveCheckpoint();
 	// delete the tuples from all the indexes.
 	// If there is any issue with removal, a FatalException must be thrown since there may be a corruption of
 	// data, hence the transaction cannot be guaranteed.
 	try {
-		table.RemoveFromIndexes(context, row_identifiers, count, removal_type, checkpoint_id);
+		table.RemoveFromIndexes(context, row_identifiers, count, removal_type, checkpoint_id, covered_entries);
 	} catch (std::exception &ex) {
 		throw FatalException(ErrorData(ex).Message());
 	} catch (...) {

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/mutex.hpp"
+#include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/enums/index_removal_type.hpp"
 #include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/shared_ptr_ipp.hpp"
@@ -56,11 +57,16 @@ public:
 	void RevertAppend(DataChunk &chunk, row_t row_start);
 	//! Appends deleted rows to all unique indexes.
 	void AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids);
-	//! Applies a removal or removal rollback to all index entries.
+	//! Applies a removal or removal rollback to all index entries, skipping covered entries.
 	void RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, IndexRemovalType removal_type,
-	                       optional_idx active_checkpoint = optional_idx());
+	                       optional_idx active_checkpoint = optional_idx(),
+	                       optional_ptr<const reference_set_t<IndexEntry>> covered_entries = nullptr);
+	//! Returns true if every index entry is in the covered set.
+	bool AllCovered(const reference_set_t<IndexEntry> &covered_entries) const;
 	//! Removes an index entry from the list of index entries and release any storage the index owns.
 	void RemoveIndex(idx_t index_oid);
+	//! Removes and returns an index entry without retiring it.
+	shared_ptr<IndexEntry> ExtractEntry(const IndexEntry &index);
 	//! Returns shared ownership of the stable logical index entry matching the name.
 	shared_ptr<IndexEntry> FindEntry(const Identifier &name) const;
 	//! Returns the entry matching the index OID.
@@ -125,8 +131,9 @@ public:
 	                      DataChunk &chunk, ConflictManager &conflict_manager);
 	//! Persist index buffers and install replacements before returning their metadata.
 	vector<shared_ptr<const IndexStorageInfo>> Checkpoint(TableIndexWriter &writer);
-	//! Returns the physical table columns referenced by any index.
-	unordered_set<column_t> GetIndexedColumns() const;
+	//! Returns the physical table columns referenced by any index, skipping covered entries.
+	unordered_set<column_t>
+	GetIndexedColumns(optional_ptr<const reference_set_t<IndexEntry>> covered_entries = nullptr) const;
 	//! Returns the column sets of unique indexes matching the conflict target.
 	vector<unordered_set<column_t>> GetConflictTargetColumns(const ConflictInfo &conflict_info) const;
 	//! Get the combined column ids of the unique indexes.

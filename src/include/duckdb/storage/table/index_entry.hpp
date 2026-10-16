@@ -46,6 +46,7 @@ public:
 	bool ShouldUse(optional_idx active_checkpoint) const;
 	ErrorData MergeCheckpointDeltas(BoundIndex &index);
 	void MarkWritten(optional_idx checkpoint_id);
+	void Drop(IndexDeltaType type);
 	void Reset();
 
 private:
@@ -180,6 +181,15 @@ public:
 	void InitializeLocalIndexes(TableIndexList &delete_indexes, TableIndexList &append_indexes) const;
 	//! Adds only the transaction-local delete index.
 	void InitializeLocalDeleteIndex(TableIndexList &delete_indexes) const;
+	//! Merges a transaction-local delete index into the physical index: each batch is copied into
+	//! deleted_rows_in_use, then deleted from the main index. Updates merged_count per batch so a failed
+	//! commit can revert exactly the applied entries. Returns true if the merge completed.
+	bool MergeLocalDeletes(IndexEntry &delete_entry, optional_idx active_checkpoint, idx_t &merged_count,
+	                       bool &in_use_was_empty);
+	//! Reverts the first merged_count entries of a local delete-merge after a failed commit.
+	void RevertLocalDeleteMerge(IndexEntry &delete_entry, idx_t merged_count, optional_idx active_checkpoint);
+	//! Drops the first merged_count entries of a merged delete index from deleted_rows_in_use.
+	void FinalizeLocalDeleteMerge(IndexEntry &delete_entry, idx_t merged_count, bool in_use_was_empty);
 
 public:
 	//! Acquire shared access to a stable physical index.

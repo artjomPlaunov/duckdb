@@ -660,6 +660,14 @@
         "default_value": "ALL_ERRORS_INVALIDATE_TRANSACTION"
     },
     {
+        "name": "delete_merge",
+        "description": "Apply unique-index deletes at commit by merging the transaction-local delete indexes into the main indexes",
+        "type": "BOOLEAN",
+        "default_scope": "global",
+        "default_value": "true",
+        "is_debug": true
+    },
+    {
         "name": "delim_join_as_cte",
         "description": "Rewrite delim joins to materialized CTEs during dependent join flattening.",
         "type": "BOOLEAN",

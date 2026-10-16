@@ -99,6 +99,9 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &row_ids = chunk.data[row_id_index];
 	row_ids.Flatten();
 
+	// With unique indexes, the deleted rows are appended to the delete indexes below.
+	l_state.delete_state->maintains_delete_indexes = g_state.has_unique_indexes;
+
 	// Fast path: no RETURNING and no unique indexes
 	if (!return_chunk && !g_state.has_unique_indexes) {
 		auto deleted = table.Delete(*l_state.delete_state, context.client, tableref, row_ids, chunk.size());

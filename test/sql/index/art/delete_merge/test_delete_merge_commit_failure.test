@@ -1,0 +1,110 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_commit_failure.test
+# description: A failed or reverted commit restores the keys merged out by the delete-merge
+# group: [delete_merge]
+
+require no_alternative_verify
+
+require skip_reload
+
+statement ok
+CREATE TABLE t(i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok
+INSERT INTO t SELECT range, range FROM range(1000);
+
+# post-WAL commit failure: the merged deletes must be restored
+statement ok
+SET debug_force_commit_failure=true;
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i < 500;
+
+statement ok
+UPDATE t SET i = i - 500 WHERE i >= 500;
+
+statement error
+COMMIT
+----
+Forced commit failure
+
+statement ok
+SET debug_force_commit_failure=false;
+
+query II
+SELECT count(*), max(i) FROM t;
+----
+1000	999
+
+# the restored keys are still enforced
+statement error
+INSERT INTO t VALUES (42, 0);
+----
+<REGEX>:Constraint Error.*
+
+query I
+SELECT j FROM t WHERE i = 42;
+----
+42
+
+# two tables: one only deletes, the other fails the commit
+statement ok
+CREATE TABLE other(k INTEGER PRIMARY KEY);
+
+statement ok
+INSERT INTO other SELECT range FROM range(100);
+
+statement ok
+SET debug_force_commit_failure=true;
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM other WHERE k < 50;
+
+statement ok
+DELETE FROM t WHERE i = 0;
+
+statement error
+COMMIT
+----
+Forced commit failure
+
+statement ok
+SET debug_force_commit_failure=false;
+
+query II
+SELECT count(*), min(k) FROM other;
+----
+100	0
+
+statement error
+INSERT INTO other VALUES (0);
+----
+<REGEX>:Constraint Error.*
+
+# commit failure AND revert failure: the database is invalidated, not corrupted silently
+statement ok
+SET debug_force_commit_failure=true;
+
+statement ok
+SET debug_force_commit_revert_failure=true;
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i = 999;
+
+statement error
+COMMIT
+----
+Forced commit failure
+
+statement error
+SELECT count(*) FROM t;
+----
+database has been invalidated

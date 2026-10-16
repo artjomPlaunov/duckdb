@@ -1,0 +1,93 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_alter_add_constraint.test
+# description: ALTER ADD PRIMARY KEY / UNIQUE after a maintained delete in the same transaction
+# group: [delete_merge]
+
+foreach dm true false
+
+statement ok
+SET delete_merge=${dm};
+
+# ADD PRIMARY KEY: the new index is built from a snapshot that still contains this
+# transaction's deleted rows; those ghost keys must leave the new index at commit
+statement ok
+CREATE TABLE t(a INTEGER UNIQUE, b INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE a = 1;
+
+statement ok
+ALTER TABLE t ADD PRIMARY KEY (b);
+
+statement ok
+COMMIT;
+
+statement ok
+INSERT INTO t VALUES (1, 10);
+
+query II
+SELECT count(*), min(b) FROM t;
+----
+2	10
+
+statement error
+INSERT INTO t VALUES (3, 10);
+----
+<REGEX>:Constraint Error.*
+
+statement ok
+DROP TABLE t;
+
+# ADD UNIQUE, with more rows and a delete after the ALTER as well
+statement ok
+CREATE TABLE u(a INTEGER PRIMARY KEY, b INTEGER);
+
+statement ok
+INSERT INTO u SELECT range, range + 1000 FROM range(100);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM u WHERE a < 10;
+
+statement ok
+ALTER TABLE u ADD UNIQUE (b);
+
+statement ok
+DELETE FROM u WHERE a >= 90;
+
+statement ok
+COMMIT;
+
+query II
+SELECT count(*), min(a) FROM u;
+----
+80	10
+
+# all deleted keys left both indexes
+statement ok
+INSERT INTO u SELECT range, range + 1000 FROM range(10);
+
+statement ok
+INSERT INTO u SELECT range, range + 1000 FROM range(90, 100);
+
+query I
+SELECT count(*) FROM u;
+----
+100
+
+statement error
+INSERT INTO u VALUES (200, 1000);
+----
+<REGEX>:Constraint Error.*
+
+statement ok
+DROP TABLE u;
+
+endloop

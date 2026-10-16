@@ -13,6 +13,8 @@
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/row_group.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
+#include "duckdb/main/settings.hpp"
+#include "duckdb/transaction/delete_merge_state.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 
@@ -562,11 +564,37 @@ void LocalStorage::Update(DataTable &table, DuckTableEntry &table_entry, Vector 
 	storage->GetCollection().Update(TransactionData::Unversioned(), table_entry, ids, column_ids, updates);
 }
 
+void LocalStorage::DeleteMerge(DataTable &table, LocalTableStorage &storage) {
+	if (storage.delete_indexes.Empty()) {
+		return;
+	}
+	if (tables_with_committed_deletes.find(table) == tables_with_committed_deletes.end()) {
+		return;
+	}
+	if (storage.index_append_mode == IndexAppendMode::INSERT_DUPLICATES) {
+		// WAL replay: the delete indexes are not filled during replay.
+		return;
+	}
+	if (tables_with_unmaintained_deletes.find(table) != tables_with_unmaintained_deletes.end()) {
+		// Some committed-row deletes bypassed the delete indexes: they are incomplete.
+		return;
+	}
+	if (!Settings::Get<DeleteMergeSetting>(table.db.GetDatabase())) {
+		return;
+	}
+	auto active_checkpoint = transaction.GetTransactionManager().GetActiveCheckpoint();
+	auto &indexes = table.GetDataTableInfo()->GetIndexes();
+	transaction.GetDeleteMergeState().MergeTable(indexes, storage.delete_indexes, incomplete_delete_entries,
+	                                             active_checkpoint);
+}
+
 void LocalStorage::Flush(DataTable &table, LocalTableStorage &storage, optional_ptr<StorageCommitState> commit_state) {
 	if (storage.is_dropped) {
 		storage.Rollback();
 		return;
 	}
+	// Apply unique-index deletes before appending, so re-inserted keys find their old entries gone.
+	DeleteMerge(table, storage);
 	if (storage.GetCollection().GetTotalRows() <= storage.deleted_rows) {
 		// all rows that we added were deleted
 		// rollback any partial blocks that are still outstanding
@@ -682,7 +710,35 @@ void LocalStorage::DropTable(DataTable &table) {
 	storage->is_dropped = true;
 }
 
+void LocalStorage::RegisterCommittedDelete(DataTable &table, const bool maintains_delete_indexes) {
+	tables_with_committed_deletes.insert(table);
+	if (!maintains_delete_indexes) {
+		tables_with_unmaintained_deletes.insert(table);
+	}
+}
+
+void LocalStorage::MarkNewDeleteIndex(DataTable &table, LocalTableStorage &storage, const IndexEntry &index_entry) {
+	if (tables_with_committed_deletes.find(table) == tables_with_committed_deletes.end()) {
+		return;
+	}
+	auto delete_entry = storage.delete_indexes.FindEntry(index_entry);
+	if (delete_entry) {
+		incomplete_delete_entries.insert(*delete_entry);
+	}
+}
+
+void LocalStorage::MigrateDeleteTracking(DataTable &old_dt, DataTable &new_dt) {
+	// Keep the old key: operators planned against the old DataTable still consult it.
+	if (tables_with_committed_deletes.find(old_dt) != tables_with_committed_deletes.end()) {
+		tables_with_committed_deletes.insert(new_dt);
+	}
+	if (tables_with_unmaintained_deletes.find(old_dt) != tables_with_unmaintained_deletes.end()) {
+		tables_with_unmaintained_deletes.insert(new_dt);
+	}
+}
+
 void LocalStorage::MoveStorage(DataTable &old_dt, DataTable &new_dt) {
+	MigrateDeleteTracking(old_dt, new_dt);
 	// check if there are any pending appends for the old version of the table
 	auto new_storage = table_manager.MoveEntry(old_dt);
 	if (!new_storage) {
@@ -695,6 +751,7 @@ void LocalStorage::MoveStorage(DataTable &old_dt, DataTable &new_dt) {
 
 void LocalStorage::AddColumn(DataTable &old_dt, DataTable &new_dt, ColumnDefinition &new_column,
                              ExpressionExecutor &default_executor) {
+	MigrateDeleteTracking(old_dt, new_dt);
 	// check if there are any pending appends for the old version of the table
 	auto storage = table_manager.MoveEntry(old_dt);
 	if (!storage) {
@@ -705,6 +762,7 @@ void LocalStorage::AddColumn(DataTable &old_dt, DataTable &new_dt, ColumnDefinit
 }
 
 void LocalStorage::DropColumn(DataTable &old_dt, DataTable &new_dt, const idx_t drop_column_index) {
+	MigrateDeleteTracking(old_dt, new_dt);
 	// check if there are any pending appends for the old version of the table
 	auto storage = table_manager.MoveEntry(old_dt);
 	if (!storage) {
@@ -716,6 +774,7 @@ void LocalStorage::DropColumn(DataTable &old_dt, DataTable &new_dt, const idx_t 
 
 void LocalStorage::ChangeType(DataTable &old_dt, DataTable &new_dt, idx_t changed_idx, const LogicalType &target_type,
                               const vector<StorageIndex> &bound_columns, Expression &cast_expr) {
+	MigrateDeleteTracking(old_dt, new_dt);
 	// check if there are any pending appends for the old version of the table
 	auto storage = table_manager.MoveEntry(old_dt);
 	if (!storage) {

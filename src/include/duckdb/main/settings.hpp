@@ -1106,6 +1106,19 @@ struct DefaultTransactionInvalidationPolicySetting {
 	static void OnSet(SettingCallbackInfo &info, Value &input);
 };
 
+struct DeleteMergeSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "delete_merge";
+	static constexpr const char *Description =
+	    "Apply unique-index deletes at commit by merging the transaction-local delete indexes into the main indexes";
+	static constexpr const char *InputType = "BOOLEAN";
+	static constexpr bool IsDebug = true;
+	static constexpr bool IsDeprecated = false;
+	static constexpr const char *DefaultValue = "true";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::GLOBAL_DEFAULT;
+	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+};
+
 struct DelimJoinAsCteSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "delim_join_as_cte";

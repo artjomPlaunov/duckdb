@@ -1,0 +1,88 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_create_index.test
+# description: Delete-merge with CREATE INDEX in the same or another transaction
+# group: [delete_merge]
+
+statement ok
+SET immediate_transaction_mode=true;
+
+# same transaction: DELETE, CREATE UNIQUE INDEX, DELETE, COMMIT
+statement ok
+CREATE TABLE t(i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok
+INSERT INTO t SELECT range, range FROM range(1000);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i < 100;
+
+statement ok
+CREATE UNIQUE INDEX t_j ON t(j);
+
+statement ok
+DELETE FROM t WHERE i >= 900;
+
+statement ok
+COMMIT;
+
+query II
+SELECT count(*), min(i) FROM t;
+----
+800	100
+
+# all deleted keys left both unique indexes
+statement ok
+INSERT INTO t SELECT range, range FROM range(100);
+
+statement ok
+INSERT INTO t SELECT range, range FROM range(900, 1000);
+
+query I
+SELECT count(*) FROM t;
+----
+1000
+
+statement ok
+DROP INDEX t_j;
+
+# cross transaction: con1 deletes on the fast path (no unique index on the j-only table),
+# con2 commits CREATE UNIQUE INDEX, con1 inserts (creating its local storage), con1 commits.
+# The deleted key must leave the new index.
+statement ok
+CREATE TABLE u(a INTEGER, b INTEGER);
+
+statement ok con1
+INSERT INTO u SELECT range, range FROM range(100);
+
+statement ok con1
+BEGIN;
+
+# fast-path delete: no unique indexes exist yet
+statement ok con1
+DELETE FROM u WHERE a = 7;
+
+statement ok con2
+CREATE UNIQUE INDEX u_a ON u(a);
+
+# creates con1's local storage, including an (empty) delete index for u_a
+statement ok con1
+INSERT INTO u VALUES (1000, 1000);
+
+statement ok con1
+COMMIT;
+
+query I con2
+SELECT count(*) FROM u WHERE a = 7;
+----
+0
+
+# the deleted key must be reusable in the new unique index
+statement ok con2
+INSERT INTO u VALUES (7, -1);
+
+query I con1
+SELECT b FROM u WHERE a = 7;
+----
+-1

@@ -8,13 +8,13 @@
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
-#include "duckdb/parser/column_definition.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/storage/storage_manager.hpp"
 
 #include "duckdb/transaction/append_info.hpp"
 #include "duckdb/transaction/delete_info.hpp"
+#include "duckdb/transaction/delete_merge_state.hpp"
 #include "duckdb/transaction/update_info.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 #include "duckdb/main/config.hpp"
@@ -68,6 +68,13 @@ DuckTransactionManager &DuckTransaction::GetTransactionManager() {
 
 LocalStorage &DuckTransaction::GetLocalStorage() {
 	return *storage;
+}
+
+DeleteMergeState &DuckTransaction::GetDeleteMergeState() {
+	if (!delete_merge_state) {
+		delete_merge_state = make_uniq<DeleteMergeState>();
+	}
+	return *delete_merge_state;
 }
 
 void DuckTransaction::PushCatalogEntry(CatalogEntry &entry, data_ptr_t extra_data, idx_t extra_data_size) {
@@ -314,6 +321,12 @@ ErrorData DuckTransaction::Commit(AttachedDatabase &db, CommitInfo &commit_info,
 			bool sync_now = commit_info.active_transactions == ActiveTransactionState::NO_OTHER_TRANSACTIONS;
 			commit_info.wal_sync_offset = commit_state->FlushCommit(sync_now);
 		}
+		if (delete_merge_state) {
+			// The commit can no longer fail: drop the deleted_rows_in_use copies if no one needs them.
+			// Like drop_state below, a failure here reverts a commit whose WAL marker is already
+			// flushed (the pre-existing durable-but-reported-failed window).
+			delete_merge_state->FinalizeCommit(commit_info.active_transactions);
+		}
 		drop_state.FinalizeCommit();
 		return ErrorData();
 	} catch (std::exception &ex) {
@@ -354,6 +367,10 @@ ErrorData DuckTransaction::Rollback() {
 	try {
 		storage->Rollback();
 		undo_buffer.Rollback();
+		if (delete_merge_state) {
+			// restore merged deletes after the rollback removed this transaction's index appends
+			delete_merge_state->Revert(GetTransactionManager().GetActiveCheckpoint());
+		}
 		return ErrorData();
 	} catch (std::exception &ex) {
 		return ErrorData(ex);

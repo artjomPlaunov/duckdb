@@ -1278,7 +1278,10 @@ bool ART::SupportsDeltaIndexes() const {
 }
 
 unique_ptr<BoundIndex> ART::CreateEmptyCopy(const IndexConstraintType constraint_type) const {
-	return make_uniq<ART>(name, constraint_type, GetColumnIds(), table_io_manager, unbound_expressions, db);
+	auto copy = make_uniq<ART>(name, constraint_type, GetColumnIds(), table_io_manager, unbound_expressions, db);
+	// Keep this index's key encoding so that keys of the copy stay comparable to the main index.
+	copy->storage_version = storage_version;
+	return std::move(copy);
 }
 
 //===-------------------------------------------------------------------===//

@@ -5,7 +5,6 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/conflict_manager.hpp"
 #include "duckdb/common/types/constraint_conflict_info.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/operator/persistent/collection_merger.hpp"
 #include "duckdb/execution/row_id_deduplicator.hpp"
@@ -16,8 +15,6 @@
 #include "duckdb/parallel/thread_context.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/statement/insert_statement.hpp"
-#include "duckdb/parser/statement/update_statement.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/table_io_manager.hpp"
 #include "duckdb/storage/table/append_state.hpp"
@@ -284,6 +281,7 @@ static idx_t PerformOnConflictAction(InsertLocalState &lstate, InsertGlobalState
 
 	if (GLOBAL) {
 		auto &delete_state = lstate.GetDeleteState(data_table, table, context.client);
+		// maintains_delete_indexes stays false: the delete indexes receive the updated values, not the old rows.
 		data_table.Delete(delete_state, context.client, table, row_ids, update_chunk.size());
 	} else {
 		auto &local_storage = LocalStorage::Get(context.client, data_table.db);

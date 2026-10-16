@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/reference_map.hpp"
 #include "duckdb/storage/table/row_group.hpp"
 #include "duckdb/storage/table/segment_tree.hpp"
 #include "duckdb/storage/statistics/column_statistics.hpp"
@@ -156,7 +157,8 @@ public:
 	bool IsPersistent() const;
 
 	void RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes, Vector &row_identifiers, idx_t count,
-	                       IndexRemovalType removal_type, optional_idx active_checkpoint = optional_idx());
+	                       IndexRemovalType removal_type, optional_idx active_checkpoint = optional_idx(),
+	                       optional_ptr<const reference_set_t<IndexEntry>> covered_entries = nullptr);
 
 	idx_t Delete(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids, idx_t count);
 	void Update(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids,

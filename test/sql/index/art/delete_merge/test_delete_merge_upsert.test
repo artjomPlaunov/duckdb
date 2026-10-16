@@ -1,0 +1,209 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_upsert.test
+# description: UPSERT on keys deleted in the same transaction, and concurrently with a deleting transaction
+# group: [delete_merge]
+
+statement ok
+SET immediate_transaction_mode=true;
+
+foreach dm true false
+
+statement ok
+SET delete_merge=${dm};
+
+statement ok
+CREATE TABLE t(i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok
+INSERT INTO t SELECT range, range FROM range(1000);
+
+# upsert on a key deleted in the same transaction: plain insert
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i = 1;
+
+statement ok
+INSERT INTO t VALUES (1, -1) ON CONFLICT DO UPDATE SET j = -2;
+
+statement ok
+COMMIT;
+
+query I
+SELECT j FROM t WHERE i = 1;
+----
+-1
+
+# upsert hitting an existing key: DO UPDATE (delete + insert of the conflict row)
+statement ok
+INSERT INTO t VALUES (2, 0) ON CONFLICT DO UPDATE SET j = -3;
+
+query I
+SELECT j FROM t WHERE i = 2;
+----
+-3
+
+# DO NOTHING on a deleted key inserts
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i = 3;
+
+statement ok
+INSERT INTO t VALUES (3, -4) ON CONFLICT DO NOTHING;
+
+statement ok
+COMMIT;
+
+query I
+SELECT j FROM t WHERE i = 3;
+----
+-4
+
+# upserts across several transactions keep the index consistent
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO t SELECT range, -10 FROM range(100) ON CONFLICT DO UPDATE SET j = -10;
+
+statement ok
+DELETE FROM t WHERE i >= 500;
+
+statement ok
+COMMIT;
+
+query III
+SELECT count(*), min(j), count(*) FILTER (j = -10) FROM t;
+----
+500	-10	100
+
+statement ok
+INSERT INTO t SELECT range, 1 FROM range(500, 1000);
+
+query I
+SELECT count(*) FROM t;
+----
+1000
+
+statement ok
+DROP TABLE t;
+
+endloop
+
+# concurrent: con2 upserts while con1 holds deletes of the same keys
+foreach dm2 true false
+
+statement ok
+SET delete_merge=${dm2};
+
+statement ok
+CREATE TABLE c(i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok con1
+INSERT INTO c SELECT range, range FROM range(100);
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM c WHERE i = 10;
+
+# con2 still sees the key (con1 is uncommitted): DO NOTHING skips the insert
+statement ok con2
+INSERT INTO c VALUES (10, -1) ON CONFLICT DO NOTHING;
+
+query I con2
+SELECT j FROM c WHERE i = 10;
+----
+10
+
+statement ok con1
+COMMIT;
+
+# after con1's commit the key is gone and reusable
+statement ok con2
+INSERT INTO c VALUES (10, -1) ON CONFLICT DO NOTHING;
+
+query I con2
+SELECT j FROM c WHERE i = 10;
+----
+-1
+
+statement ok
+DROP TABLE c;
+
+endloop
+
+# del+insert UPSERT on an indexed column: the delete indexes receive the updated values,
+# so the table must fall back to the fetch path and stay correct
+foreach dm3 true false
+
+statement ok
+SET delete_merge=${dm3};
+
+statement ok
+CREATE TABLE p(i INTEGER PRIMARY KEY, k INTEGER UNIQUE);
+
+statement ok con1
+INSERT INTO p SELECT range, range + 1000 FROM range(100);
+
+# reader with an older snapshot stays open across the commit
+statement ok con3
+BEGIN;
+
+query I con3
+SELECT count(*) FROM p;
+----
+100
+
+statement ok con1
+BEGIN;
+
+# maintained delete fills the delete indexes
+statement ok con1
+DELETE FROM p WHERE i < 10;
+
+# DO UPDATE SET on the indexed column k: del+insert upsert, delete indexes get the NEW k values
+statement ok con1
+INSERT INTO p VALUES (50, 0) ON CONFLICT (i) DO UPDATE SET k = 5000;
+
+statement ok con1
+COMMIT;
+
+# the reader's snapshot predates the commit
+query II con3
+SELECT count(*), count(*) FILTER (k = 1050) FROM p;
+----
+100	1
+
+statement ok con3
+COMMIT;
+
+query III con1
+SELECT count(*), count(*) FILTER (k = 5000), count(*) FILTER (k = 1050) FROM p;
+----
+90	1	0
+
+# both the deleted keys and the replaced k value left the indexes
+statement ok con1
+INSERT INTO p SELECT range, range + 1000 FROM range(10);
+
+statement ok con1
+INSERT INTO p VALUES (200, 1050);
+
+statement error con1
+INSERT INTO p VALUES (201, 5000);
+----
+<REGEX>:Constraint Error.*
+
+statement error con1
+INSERT INTO p VALUES (50, 0);
+----
+<REGEX>:Constraint Error.*
+
+statement ok
+DROP TABLE p;
+
+endloop

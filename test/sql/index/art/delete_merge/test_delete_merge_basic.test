@@ -1,0 +1,163 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_basic.test
+# description: Delete-merge of local delete indexes at commit: basic flows, A/B against the fetch path
+# group: [delete_merge]
+
+foreach dm true false
+
+statement ok
+SET delete_merge=${dm};
+
+statement ok
+CREATE TABLE t(i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok
+INSERT INTO t SELECT range, range % 100 FROM range(10000);
+
+# plain delete
+statement ok
+DELETE FROM t WHERE i < 5000;
+
+query II
+SELECT count(*), min(i) FROM t;
+----
+5000	5000
+
+# re-inserting the deleted keys succeeds
+statement ok
+INSERT INTO t SELECT range, 0 FROM range(5000);
+
+query I
+SELECT count(*) FROM t;
+----
+10000
+
+# delete + reinsert of the same key within one transaction
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i = 42;
+
+statement ok
+INSERT INTO t VALUES (42, -1);
+
+statement ok
+COMMIT;
+
+query I
+SELECT j FROM t WHERE i = 42;
+----
+-1
+
+# PK update (delete + insert of the same key range)
+statement ok
+UPDATE t SET i = i + 10000 WHERE i < 100;
+
+query II
+SELECT count(*), max(i) FROM t;
+----
+10000	10099
+
+statement ok
+UPDATE t SET i = i - 10000 WHERE i >= 10000;
+
+# no-op PK update
+statement ok
+UPDATE t SET i = i WHERE i < 100;
+
+query I
+SELECT count(*) FROM t;
+----
+10000
+
+# rollback restores the index
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t;
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM t WHERE i = 42;
+----
+1
+
+statement error
+INSERT INTO t VALUES (42, 0);
+----
+<REGEX>:Constraint Error.*
+
+# delete everything, then verify the index is empty
+statement ok
+DELETE FROM t;
+
+statement ok
+INSERT INTO t SELECT range, 0 FROM range(100);
+
+query I
+SELECT count(*) FROM t;
+----
+100
+
+# a failing deferred-style commit: delete + duplicate insert in one transaction, second statement fails,
+# the aborted transaction must leave the index intact
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i = 7;
+
+statement error
+INSERT INTO t VALUES (8, 0), (8, 0);
+----
+<REGEX>:Constraint Error.*
+
+statement ok
+ROLLBACK;
+
+query I
+SELECT count(*) FROM t WHERE i IN (7, 8);
+----
+2
+
+statement error
+INSERT INTO t VALUES (7, 0);
+----
+<REGEX>:Constraint Error.*
+
+# multiple unique indexes on one table
+statement ok
+CREATE TABLE multi(a INTEGER PRIMARY KEY, b INTEGER UNIQUE, c INTEGER);
+
+statement ok
+CREATE INDEX multi_c ON multi(c);
+
+statement ok
+INSERT INTO multi SELECT range, range + 100000, range % 10 FROM range(1000);
+
+statement ok
+DELETE FROM multi WHERE a < 500;
+
+query III
+SELECT count(*), min(a), min(b) FROM multi;
+----
+500	500	100500
+
+statement ok
+INSERT INTO multi VALUES (0, 100000, 0);
+
+query I
+SELECT count(*) FROM multi WHERE c = 0;
+----
+51
+
+statement ok
+DROP TABLE t;
+
+statement ok
+DROP TABLE multi;
+
+endloop

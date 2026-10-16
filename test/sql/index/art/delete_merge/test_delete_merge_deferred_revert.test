@@ -1,0 +1,61 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_deferred_revert.test
+# description: A deferred-unique violation fails the flush after the delete-merge ran; the revert restores the keys
+# group: [delete_merge]
+
+foreach dm true false
+
+statement ok
+SET delete_merge=${dm};
+
+statement ok
+CREATE TABLE t(i INTEGER PRIMARY KEY, k INTEGER UNIQUE DEFERRED);
+
+statement ok
+INSERT INTO t SELECT range, range + 1000 FROM range(100);
+
+# the merge applies the deletes at flush; the deferred-unique check then fails the same flush
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE i < 50;
+
+statement ok
+INSERT INTO t VALUES (200, 777);
+
+statement ok
+INSERT INTO t VALUES (201, 777);
+
+statement error
+COMMIT
+----
+<REGEX>:.*onstraint.*
+
+# the revert restored the merged deletes
+query II
+SELECT count(*), min(i) FROM t;
+----
+100	0
+
+statement error
+INSERT INTO t VALUES (0, 2000);
+----
+<REGEX>:Constraint Error.*
+
+statement error
+INSERT INTO t VALUES (300, 1000);
+----
+<REGEX>:.*onstraint.*
+
+statement ok
+INSERT INTO t VALUES (300, 2000);
+
+query I
+SELECT count(*) FROM t;
+----
+101
+
+statement ok
+DROP TABLE t;
+
+endloop

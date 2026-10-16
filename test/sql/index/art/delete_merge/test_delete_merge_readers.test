@@ -1,0 +1,80 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_readers.test
+# description: Index scans of older snapshots keep finding rows removed by the delete-merge
+# group: [delete_merge]
+
+statement ok
+SET immediate_transaction_mode=true;
+
+statement ok
+CREATE TABLE t(i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok con1
+INSERT INTO t SELECT range, range FROM range(10000);
+
+# con2 starts before con1 deletes
+statement ok con2
+BEGIN;
+
+query I con2
+SELECT count(*) FROM t;
+----
+10000
+
+statement ok con1
+DELETE FROM t WHERE i < 5000;
+
+# con2's snapshot predates the delete: an index scan must still find the deleted key
+query II con2
+SELECT i, j FROM t WHERE i = 42;
+----
+42	42
+
+query I con2
+SELECT count(*) FROM t WHERE i >= 0 AND i < 100;
+----
+100
+
+statement ok con2
+COMMIT;
+
+# after con2 commits, the key is gone and reusable
+query I con2
+SELECT count(*) FROM t WHERE i = 42;
+----
+0
+
+statement ok con2
+INSERT INTO t VALUES (42, -1);
+
+query I con1
+SELECT j FROM t WHERE i = 42;
+----
+-1
+
+# reader starting between delete and reinsert sees neither
+statement ok con1
+DELETE FROM t WHERE i = 9999;
+
+statement ok con2
+BEGIN;
+
+query I con2
+SELECT count(*) FROM t WHERE i = 9999;
+----
+0
+
+statement ok con1
+INSERT INTO t VALUES (9999, 1);
+
+query I con2
+SELECT count(*) FROM t WHERE i = 9999;
+----
+0
+
+statement ok con2
+COMMIT;
+
+query I con2
+SELECT j FROM t WHERE i = 9999;
+----
+1

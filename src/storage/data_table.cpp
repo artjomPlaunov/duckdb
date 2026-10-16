@@ -1257,8 +1257,10 @@ void DataTable::RevertAppend(DuckTransaction &transaction, idx_t start_row, idx_
 // Indexes
 //===--------------------------------------------------------------------===//
 void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-                                  IndexRemovalType removal_type, optional_idx active_checkpoint) {
-	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, active_checkpoint);
+                                  IndexRemovalType removal_type, optional_idx active_checkpoint,
+                                  optional_ptr<const reference_set_t<IndexEntry>> covered_entries) {
+	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, active_checkpoint,
+	                              covered_entries);
 }
 
 //===--------------------------------------------------------------------===//
@@ -1372,6 +1374,7 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 		}
 
 		// This is a regular DELETE.
+		local_storage.RegisterCommittedDelete(*this, state.maintains_delete_indexes);
 		if (state.has_delete_constraints) {
 			// Verify any delete constraints.
 			ColumnFetchState fetch_state;

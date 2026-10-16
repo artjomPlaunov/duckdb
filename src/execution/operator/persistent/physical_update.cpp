@@ -3,7 +3,6 @@
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
-#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/row_id_deduplicator.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -256,6 +255,8 @@ SinkResultType PhysicalUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	}
 
 	auto &delete_state = l_state.GetDeleteState(table, tableref, context.client);
+	// Only an index update fetches the old rows, so only then are the delete indexes filled correctly.
+	delete_state.maintains_delete_indexes = index_update;
 	table.Delete(delete_state, context.client, tableref, del_row_ids, update_count);
 
 	// Arrange the columns in the standard table order, then validate + set the cardinality from the referenced

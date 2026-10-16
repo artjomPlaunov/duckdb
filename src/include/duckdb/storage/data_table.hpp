@@ -11,6 +11,7 @@
 #include "duckdb/common/enums/column_segment_info_scan_type.hpp"
 #include "duckdb/common/enums/constraint_check_mode.hpp"
 #include "duckdb/common/unique_ptr.hpp"
+#include "duckdb/common/reference_map.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/persistent_table_data.hpp"
 #include "duckdb/transaction/local_storage.hpp"
@@ -27,6 +28,7 @@ class DataTable;
 class DataChunk;
 class DistinctStatistics;
 class DuckTransaction;
+class IndexEntry;
 class Expression;
 class Index;
 class OptimisticDataWriter;
@@ -201,9 +203,10 @@ public:
 	//! Merge a row group collection directly into this table - appending it to the end of the table without copying
 	void MergeStorage(RowGroupCollection &data, optional_ptr<StorageCommitState> commit_state);
 
-	//! Remove the row identifiers from all the indexes of the table
+	//! Remove the row identifiers from all the indexes of the table, skipping covered entries.
 	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-	                       IndexRemovalType removal_type, optional_idx checkpoint_id = optional_idx());
+	                       IndexRemovalType removal_type, optional_idx checkpoint_id = optional_idx(),
+	                       optional_ptr<const reference_set_t<IndexEntry>> covered_entries = nullptr);
 
 	void SetAsMainTable() {
 		this->version = DataTableVersion::MAIN_TABLE;
