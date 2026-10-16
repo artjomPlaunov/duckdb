@@ -44,8 +44,7 @@ statement ok
 ATTACH '{TEST_DIR}/test_fk_eager.db' AS fk_db;
 
 # Now, we try to update the PK table.
-# Updating only a non-PK column (here, payload) must NOT raise a spurious FK violation —
-# the matching INSERT half of the DELETE+INSERT rewrite re-adds the same PK. See issue #16409.
+# Updating only the non-PK payload column must not raise a spurious FK violation (issue #16409).
 statement ok
 UPDATE fk_db.tbl_pk SET payload = {'v': 'new hello', 'i': [7]} WHERE i = 1;
 
