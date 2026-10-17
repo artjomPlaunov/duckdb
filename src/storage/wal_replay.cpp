@@ -7,6 +7,7 @@
 #include "duckdb/common/encryption_functions.hpp"
 #include "duckdb/common/encryption_key_manager.hpp"
 #include "duckdb/common/numeric_utils.hpp"
+#include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/serializer/binary_deserializer.hpp"
 #include "duckdb/common/serializer/buffered_file_reader.hpp"
 #include "duckdb/common/serializer/memory_stream.hpp"
@@ -33,7 +34,6 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/single_file_block_manager.hpp"
 #include "duckdb/storage/storage_manager.hpp"
-#include "duckdb/common/reference_map.hpp"
 #include "duckdb/storage/table/column_data.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/delete_state.hpp"
@@ -82,8 +82,7 @@ public:
 
 		reference<TableIndexList> index_list;
 		unique_ptr<Index> index;
-		//! Shared table state used to strip the replayed transaction's deletes from the attached
-		//! index; the DataTable itself may be replaced (and freed) by an ALTER in the transaction.
+		//! Kept alive for stripping deletes: an ALTER in the transaction may free the DataTable.
 		shared_ptr<DataTableInfo> table_info;
 		shared_ptr<RowGroupCollection> row_groups;
 		//! The oid of the table, used to uniquely identify the table (even after a rename).
@@ -94,21 +93,17 @@ public:
 		ConstraintCheckMode check_mode;
 	};
 	vector<ReplayIndexInfo> replay_index_infos;
-	//! Row ids deleted by the current replay transaction, per table. The WAL images of indexes created
-	//! in the same transaction were serialized before the commit removed these rows. Recorded
-	//! unconditionally: deletes that precede the CREATE INDEX in the transaction also need stripping.
+	//! Row ids deleted by the current replay transaction, per table.
 	reference_map_t<DataTableInfo, unsafe_vector<row_t>> replay_transaction_deletes;
 
-	//! Removes the replayed transaction's deleted rows from a just-attached index.
-	//! Unbound indexes buffer the removal; it applies when the index is first bound.
+	//! Removes the transaction's deleted rows from an attached index (buffered if the index is unbound).
 	void StripTransactionDeletes(ClientContext &strip_context, DataTableInfo &table_info,
 	                             RowGroupCollection &row_groups, IndexEntry &index_entry) {
 		auto deletes = replay_transaction_deletes.find(table_info);
 		if (deletes == replay_transaction_deletes.end() || deletes->second.empty()) {
 			return;
 		}
-		// Every other index already had these rows removed at the replay commit: marking them
-		// covered reuses the fetch-based removal machinery to strip a single index.
+		// The other indexes already removed these rows at commit.
 		reference_set_t<IndexEntry> covered_entries;
 		for (auto entry : table_info.GetIndexes().IndexEntries()) {
 			if (entry.get() != &index_entry) {
@@ -699,8 +694,7 @@ unique_ptr<WriteAheadLog> WriteAheadLogReplayer::ReplayLog(unique_ptr<FileHandle
 			if (deserializer.ReplayEntry()) {
 				con.Commit();
 
-				// Commit any outstanding indexes. Their images were serialized before the creating
-				// transaction's commit removed its deleted rows: strip those rows after attaching.
+				// Commit any outstanding indexes. Their images still hold the rows the transaction deleted.
 				for (auto &info : state.replay_index_infos) {
 					auto index_entry =
 					    info.index_list.get().AddIndex(std::move(info.index), info.index_oid, info.check_mode);
@@ -1435,11 +1429,9 @@ void WriteAheadLogDeserializer::ReplayDelete() {
 	TableDeleteState delete_state;
 	storage.Delete(delete_state, context, *state.current_table, row_identifiers, chunk.size());
 
-	// Record the deletes: indexes attached at the end of this transaction must strip these rows.
+	// Indexes attached at the end of this transaction must strip these rows.
 	auto &deleted_rows = state.replay_transaction_deletes[*storage.GetDataTableInfo()];
-	for (idx_t i = 0; i < chunk.size(); i++) {
-		deleted_rows.push_back(source_ids[i]);
-	}
+	deleted_rows.insert(deleted_rows.end(), source_ids, source_ids + chunk.size());
 }
 
 void WriteAheadLogDeserializer::ReplayUpdate() {

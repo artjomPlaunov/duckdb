@@ -190,8 +190,7 @@ public:
 	void InitializeLocalIndexes(TableIndexList &delete_indexes, TableIndexList &append_indexes) const;
 	//! Adds only the transaction-local delete index.
 	void InitializeLocalDeleteIndex(TableIndexList &delete_indexes) const;
-	//! Merges a transaction-local delete index into the physical index, batch by batch.
-	//! The delete index is adopted as a scan overlay first, so older snapshots keep finding the rows.
+	//! Merges a local delete index into this index and adopts it as a scan overlay. Returns true if fully merged.
 	bool MergeLocalDeletes(const shared_ptr<IndexEntry> &delete_entry, optional_idx active_checkpoint,
 	                       idx_t &merged_count);
 	//! Reverts the first merged_count entries of a local delete-merge after a failed commit.

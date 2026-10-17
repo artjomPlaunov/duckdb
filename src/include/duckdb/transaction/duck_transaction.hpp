@@ -12,12 +12,12 @@
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/transaction/delete_merge_state.hpp"
 #include "duckdb/transaction/undo_buffer.hpp"
 #include "duckdb/common/enums/active_transaction_state.hpp"
 
 namespace duckdb {
 class CommitDropState;
-class DeleteMergeState;
 class DuckTableEntry;
 class RowGroupCollection;
 class RowVersionManager;
@@ -110,11 +110,8 @@ public:
 
 	unique_ptr<StorageLockKey> TryGetCheckpointLock();
 
-	//! Returns the delete-merge state, creating it on first use.
-	DeleteMergeState &GetDeleteMergeState();
-	//! Returns the delete-merge state if any delete-merge ran.
-	optional_ptr<DeleteMergeState> TryGetDeleteMergeState() {
-		return delete_merge_state.get();
+	DeleteMergeState &GetDeleteMergeState() {
+		return delete_merge_state;
 	}
 
 	void SetIsCheckpointTransaction() {
@@ -127,8 +124,8 @@ private:
 	UndoBuffer undo_buffer;
 	//! The set of uncommitted appends for the transaction
 	unique_ptr<LocalStorage> storage;
-	//! Tracks unique-index deletes applied at flush by merging the local delete indexes.
-	unique_ptr<DeleteMergeState> delete_merge_state;
+	//! The unique-index deletes merged at commit.
+	DeleteMergeState delete_merge_state;
 	//! Lock that prevents checkpoints from starting
 	unique_ptr<StorageLockKey> checkpoint_lock;
 	//! Lock that prevents vacuums from starting

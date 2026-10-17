@@ -238,8 +238,7 @@ private:
 	DuckTransaction &transaction;
 	LocalTableManager table_manager;
 	bool synced_flushed_blocks = false;
-	//! Tables whose delete indexes missed committed-row deletes; keyed by the DataTableInfo,
-	//! which is stable across the DataTable replacements of ALTER.
+	//! Tables whose delete indexes missed committed-row deletes (the DataTableInfo survives ALTER).
 	reference_set_t<DataTableInfo> tables_with_incomplete_delete_indexes;
 	//! Parallel delete sinks mark tables concurrently.
 	mutex incomplete_delete_indexes_lock;

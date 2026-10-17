@@ -1,0 +1,53 @@
+# name: test/sql/index/art/delete_merge/test_delete_merge_parallel_delete.test
+# description: Parallel deletes that bypass the delete indexes mark the table incomplete from multiple threads
+# group: [delete_merge]
+
+statement ok
+SET threads=8;
+
+statement ok
+CREATE TABLE t AS SELECT range AS i, range % 100 AS j FROM range(2000000);
+
+loop x 0 10
+
+statement ok
+DELETE FROM t WHERE i % 10 = {x} AND j < 50;
+
+endloop
+
+query I
+SELECT count(*) FROM t;
+----
+1000000
+
+# A unique index created by another transaction after the parallel delete: the commit must take the fetch path.
+statement ok
+CREATE TABLE u AS SELECT range AS i FROM range(1000000);
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM u WHERE i % 2 = 0;
+
+statement ok con2
+CREATE UNIQUE INDEX u_i ON u(i);
+
+statement ok con1
+INSERT INTO u VALUES (-1);
+
+statement ok con1
+COMMIT;
+
+statement ok
+INSERT INTO u SELECT range FROM range(0, 1000000, 2);
+
+query II
+SELECT count(*), count(DISTINCT i) FROM u;
+----
+1000001	1000001
+
+statement error
+INSERT INTO u VALUES (2);
+----
+<REGEX>:Constraint Error:.*Duplicate key.*

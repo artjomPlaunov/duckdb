@@ -24,7 +24,8 @@
         "test/sql/constraints/deferred/test_deferred_statements.test",
         "test/sql/constraints/deferred/test_deferred_syntax.test",
         "test/sql/constraints/deferred/test_deferred_trigger.test",
-        "test/sql/constraints/deferred/test_deferred_unique_pk.test"
+        "test/sql/constraints/deferred/test_deferred_unique_pk.test",
+        "test/sql/index/art/delete_merge/test_delete_merge_deferred_revert.test"
       ]
     },
     {

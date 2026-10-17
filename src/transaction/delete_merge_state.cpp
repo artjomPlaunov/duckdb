@@ -13,39 +13,22 @@ void DeleteMergeState::MergeTable(TableIndexList &indexes, TableIndexList &delet
 		entries.push_back(std::move(entry));
 	}
 	for (auto &entry : entries) {
-		// Eligibility is checked under the entry lock in MergeLocalDeletes:
-		// a concurrent rollback can retire the entry at any point.
-		if (entry->GetBindState() != IndexBindState::BOUND) {
+		if (entry->GetBindState() != IndexBindState::BOUND || !entry->IsUnique()) {
 			continue;
 		}
 		auto delete_entry = delete_indexes.FindEntry(*entry);
 		if (!delete_entry) {
 			continue;
 		}
+		// The local storage dies before the commit outcome is known: take over the delete index.
+		delete_indexes.ExtractEntry(delete_entry->GetIndexOid());
 		records.emplace_back();
 		auto &record = records.back();
 		record.entry = entry;
-		record.delete_entry = delete_entry;
-		bool complete = false;
-		try {
-			complete = entry->MergeLocalDeletes(delete_entry, active_checkpoint, record.merged_count);
-		} catch (...) {
-			// Pin the delete index before the local storage dies: the revert needs its keys.
-			delete_indexes.ExtractEntry(delete_entry->GetIndexOid());
-			throw;
-		}
-		if (complete) {
+		record.delete_entry = std::move(delete_entry);
+		if (entry->MergeLocalDeletes(record.delete_entry, active_checkpoint, record.merged_count)) {
 			covered.insert(*entry);
 		}
-		if (record.merged_count == 0) {
-			// Nothing was applied and no overlay is attached: keep the delete index in the
-			// local storage for append-time exclusion checks.
-			records.pop_back();
-			continue;
-		}
-		// Take sole ownership of the delete index: the local storage dies before the commit
-		// outcome is known, and its destructor would retire the entry.
-		delete_indexes.ExtractEntry(delete_entry->GetIndexOid());
 	}
 }
 

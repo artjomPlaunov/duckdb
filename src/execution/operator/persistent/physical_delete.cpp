@@ -69,7 +69,7 @@ public:
 		delete_chunk.Initialize(Allocator::Get(context), types, initialize);
 
 		auto &storage = table.GetStorage();
-		// Deleted rows are appended to the delete indexes in Sink when unique indexes exist.
+		// Sink appends the deleted rows to the delete indexes of unique indexes.
 		delete_state = storage.InitializeDelete(table, context, bound_constraints, has_unique_indexes);
 
 		if (return_chunk) {
