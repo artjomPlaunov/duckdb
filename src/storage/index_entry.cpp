@@ -390,7 +390,7 @@ void IndexEntry::RemoveFromIndex(DataChunk &chunk, Vector &row_ids, const IndexR
 
 bool IndexEntry::IsUnique() const {
 	auto entry_lock = lock.GetSharedLock();
-	return owned_index && owned_index->IsUnique();
+	return owned_index->IsUnique();
 }
 
 bool IndexEntry::IsDeferred() const {

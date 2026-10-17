@@ -952,7 +952,7 @@ bool TryScanIndex(const IndexReadHandle<ART> &art, const ColumnList &column_list
 		}
 	}
 	// Older snapshots find merged-out rows in the adopted delete indexes.
-	for (const auto &adopted : art.AdoptedDeltas()) {
+	for (const auto &adopted : art.AdoptedDeletes()) {
 		if (!adopted.get().Scan(*scan_state, row_ids)) {
 			return false;
 		}

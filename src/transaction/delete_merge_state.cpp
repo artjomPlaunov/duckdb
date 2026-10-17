@@ -13,11 +13,12 @@ void DeleteMergeState::MergeTable(TableIndexList &indexes, TableIndexList &delet
 		entries.push_back(std::move(entry));
 	}
 	for (auto &entry : entries) {
-		if (entry->GetBindState() != IndexBindState::BOUND || !entry->IsUnique()) {
+		if (entry->GetBindState() != IndexBindState::BOUND) {
 			continue;
 		}
+		// Non-unique indexes also have (empty) delete indexes: only unique indexes track their deletes.
 		auto delete_entry = delete_indexes.FindEntry(*entry);
-		if (!delete_entry) {
+		if (!delete_entry || !delete_entry->IsUnique()) {
 			continue;
 		}
 		// The local storage dies before the commit outcome is known: take over the delete index.

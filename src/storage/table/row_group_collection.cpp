@@ -42,7 +42,20 @@ static bool CanRebuildExistingIndexesAfterVacuum(DataTableInfo &info, AttachedDa
 	}
 	// Rebuild only applies when there are indexes to rebuild: indexless tables use the NO_INDEXES strategy.
 	auto &indexes = info.GetIndexes();
-	return !indexes.Empty() && indexes.AllIndexesBoundOfType(ART::TYPE_NAME);
+	if (indexes.Empty() || !indexes.AllIndexesBoundOfType(ART::TYPE_NAME)) {
+		return false;
+	}
+	for (auto entry : indexes.IndexEntries()) {
+		if (entry->GetBindState() != IndexBindState::BOUND || entry->GetIndexType() != ART::TYPE_NAME) {
+			return false;
+		}
+		const auto art = entry->GetReadHandle<ART>();
+		// Older snapshots can still read removed row ids from these deltas.
+		if (art.FindDelta(IndexDeltaType::DELETED_ROWS_IN_USE) || art.HasAdoptedDeletes()) {
+			return false;
+		}
+	}
+	return true;
 }
 
 //! Returns true if checkpoint vacuum can incrementally remap every index: rowid gaps are persistable and
@@ -73,7 +86,7 @@ static bool CanVacuumRemap(DataTableInfo &table_info, AttachedDatabase &attached
 			return false;
 		}
 		// Older snapshots can still read removed row ids from these deltas.
-		if (art.FindDelta(IndexDeltaType::DELETED_ROWS_IN_USE) || !art.AdoptedDeltas().empty()) {
+		if (art.FindDelta(IndexDeltaType::DELETED_ROWS_IN_USE) || art.HasAdoptedDeletes()) {
 			if (remap_indexes) {
 				remap_indexes->clear();
 			}

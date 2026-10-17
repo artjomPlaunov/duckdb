@@ -358,7 +358,7 @@ ErrorData DuckTransaction::Rollback() {
 	try {
 		storage->Rollback();
 		undo_buffer.Rollback();
-		// After the undo-buffer rollback removed this transaction's appends of the same keys.
+		// The rollback above removed this transaction's appends: the merged keys can return.
 		delete_merge_state.Revert(GetTransactionManager().GetActiveCheckpoint());
 		return ErrorData();
 	} catch (std::exception &ex) {

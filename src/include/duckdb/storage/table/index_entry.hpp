@@ -83,8 +83,9 @@ public:
 	optional_ptr<const TARGET> FindDelta(IndexDeltaType type) const &;
 	optional_ptr<const TARGET> FindDelta(IndexDeltaType type) const && = delete;
 
-	vector<reference<const TARGET>> AdoptedDeltas() const &;
-	vector<reference<const TARGET>> AdoptedDeltas() const && = delete;
+	vector<reference<const TARGET>> AdoptedDeletes() const &;
+	vector<reference<const TARGET>> AdoptedDeletes() const && = delete;
+	bool HasAdoptedDeletes() const &;
 
 private:
 	friend class IndexEntry;
@@ -280,12 +281,17 @@ optional_ptr<const TARGET> IndexReadHandle<TARGET>::FindDelta(IndexDeltaType typ
 }
 
 template <class TARGET>
-vector<reference<const TARGET>> IndexReadHandle<TARGET>::AdoptedDeltas() const & {
+vector<reference<const TARGET>> IndexReadHandle<TARGET>::AdoptedDeletes() const & {
 	vector<reference<const TARGET>> result;
 	for (auto &adopted : GetEntry().deltas.AdoptedDeletes()) {
 		result.push_back(adopted->owned_index->template Cast<TARGET>());
 	}
 	return result;
+}
+
+template <class TARGET>
+bool IndexReadHandle<TARGET>::HasAdoptedDeletes() const & {
+	return !GetEntry().deltas.AdoptedDeletes().empty();
 }
 
 template <class TARGET>
