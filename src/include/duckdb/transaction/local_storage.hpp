@@ -22,7 +22,7 @@ class CollectionScanState;
 class ColumnDefinition;
 class DataChunk;
 class DataTable;
-class DataTableInfo;
+struct DataTableInfo;
 class DuckTableEntry;
 class DuckTransaction;
 class Expression;
@@ -241,6 +241,8 @@ private:
 	//! Tables whose delete indexes missed committed-row deletes; keyed by the DataTableInfo,
 	//! which is stable across the DataTable replacements of ALTER.
 	reference_set_t<DataTableInfo> tables_with_incomplete_delete_indexes;
+	//! Parallel delete sinks mark tables concurrently.
+	mutex incomplete_delete_indexes_lock;
 
 private:
 	void Flush(DataTable &table, LocalTableStorage &storage, optional_ptr<StorageCommitState> commit_state);

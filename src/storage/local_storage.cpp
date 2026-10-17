@@ -568,9 +568,12 @@ void LocalStorage::MergeDeleteIndexes(DataTable &table, LocalTableStorage &stora
 		return;
 	}
 	auto &info = *table.GetDataTableInfo();
-	if (tables_with_incomplete_delete_indexes.find(info) != tables_with_incomplete_delete_indexes.end()) {
-		// Some committed-row deletes bypassed the delete indexes: fall back to the fetch path.
-		return;
+	{
+		lock_guard<mutex> guard(incomplete_delete_indexes_lock);
+		if (tables_with_incomplete_delete_indexes.find(info) != tables_with_incomplete_delete_indexes.end()) {
+			// Some committed-row deletes bypassed the delete indexes: fall back to the fetch path.
+			return;
+		}
 	}
 	auto active_checkpoint = transaction.GetTransactionManager().GetActiveCheckpoint();
 	transaction.GetDeleteMergeState().MergeTable(info.GetIndexes(), storage.delete_indexes, active_checkpoint);
@@ -699,6 +702,7 @@ void LocalStorage::DropTable(DataTable &table) {
 }
 
 void LocalStorage::MarkDeleteIndexesIncomplete(DataTable &table) {
+	lock_guard<mutex> guard(incomplete_delete_indexes_lock);
 	tables_with_incomplete_delete_indexes.insert(*table.GetDataTableInfo());
 }
 
