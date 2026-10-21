@@ -376,8 +376,7 @@ void WriteAheadLog::WriteDropTableMacro(const TableMacroCatalogEntry &entry) {
 // Indexes
 //===--------------------------------------------------------------------===//
 
-void SerializeIndex(AttachedDatabase &db, WriteAheadLogSerializer &serializer, TableIndexList &list,
-                    idx_t index_oid) {
+void SerializeIndex(AttachedDatabase &db, WriteAheadLogSerializer &serializer, TableIndexList &list, idx_t index_oid) {
 	auto storage_version = db.GetStorageManager().GetStorageVersion();
 	auto info = list.SerializeToWAL(index_oid, storage_version);
 	if (!info) {

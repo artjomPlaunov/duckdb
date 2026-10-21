@@ -156,8 +156,8 @@ ART::ART(const Identifier &name, const IndexConstraintType index_constraint_type
 ART::ART(const ART &src, shared_ptr<AllocatorArray> allocators_ptr)
     : BoundIndex(src.name, ART::TYPE_NAME, src.index_constraint_type, src.column_ids, src.table_io_manager,
                  src.unbound_expressions, src.db),
-      tree(src.tree), allocators(std::move(allocators_ptr)), owns_data(true),
-      storage_version(src.storage_version), prefix_count(src.prefix_count) {
+      tree(src.tree), allocators(std::move(allocators_ptr)), owns_data(true), storage_version(src.storage_version),
+      prefix_count(src.prefix_count) {
 	D_ASSERT(allocators);
 }
 
