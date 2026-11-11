@@ -568,6 +568,7 @@ shared_ptr<BaseUnionData> ParquetReader::GetUnionData(idx_t file_idx) {
 		result->names.push_back(column.name.GetIdentifierName());
 		result->types.push_back(column.type);
 	}
+	result->column_name_index.Build(result->names);
 
 	result->options = parquet_options;
 	result->metadata = metadata;
@@ -641,8 +642,13 @@ AsyncResult ParquetReader::Scan(ClientContext &context, GlobalTableFunctionState
 		}
 	}
 #endif
+	auto &gstate = gstate_p.Cast<ParquetReadGlobalState>();
 	auto &local_state = local_state_p.Cast<ParquetReadLocalState>();
-	return Process(context, local_state.scan_state, chunk);
+	// a row group's bytes are counted when its scan starts, in Process
+	auto bytes_before = local_state.scan_state.bytes_scanned;
+	auto result = Process(context, local_state.scan_state, chunk);
+	gstate.bytes_scanned_unreported += local_state.scan_state.bytes_scanned - bytes_before;
+	return result;
 }
 
 unique_ptr<MultiFileReaderInterface> ParquetMultiFileInfo::Copy() {
