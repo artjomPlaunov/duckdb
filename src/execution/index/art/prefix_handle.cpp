@@ -78,21 +78,6 @@ void PrefixHandle::Append(ART &art, PrefixHandle prefix, NodePtr other_ptr) {
 	prefix.Child(art) = other_ptr;
 }
 
-PrefixHandle PrefixHandle::GetTail(ART &art, const NodePtr node_ptr) {
-	D_ASSERT(node_ptr.GetType() == PREFIX);
-
-	NodePtr current_ptr = node_ptr;
-	while (true) {
-		// The handle is released at the end of each iteration, before pinning the next link.
-		PrefixHandle prefix(NodeHandle(art, current_ptr));
-		NodePtr child_ptr = prefix.Child(art);
-		if (child_ptr.GetType() != PREFIX) {
-			return prefix;
-		}
-		current_ptr = child_ptr;
-	}
-}
-
 void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr,
                           const uint8_t byte, const GateStatus node4_status, const GateStatus status,
                           optional<NodeHandle> node4_slot_handle) {
@@ -139,7 +124,10 @@ void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, con
 		// (PREFIX[a] -> Node4 -> PREFIX[c] -> X) ==> (PREFIX[a, byte, c] -> X)
 		// (PREFIX[full] -> Node4 -> X) ==> (PREFIX[full] -> PREFIX[byte] -> X)
 		// (PREFIX[full] -> Node4 -> PREFIX[c] -> X) ==> (PREFIX[full] -> PREFIX[byte, c] -> X)
-		Append(art, AppendByte(art, GetTail(art, parent_ptr), byte), child_ptr);
+		D_ASSERT(node4_slot_handle);
+		PrefixHandle tail(std::move(*node4_slot_handle));
+		D_ASSERT(&tail.Child(art) == &node4_ptr);
+		Append(art, AppendByte(art, std::move(tail), byte), child_ptr);
 		return;
 	}
 	// (INNER_NODE -> Node4 -> X) ==> (INNER_NODE -> PREFIX[byte] -> X)

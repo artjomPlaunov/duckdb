@@ -51,8 +51,8 @@ public:
 	//! Replaces a freed Node4 that had one remaining child: concatenates parent -> byte -> child.
 	//! parent_ptr is the inner node above the Node4, or the head of the prefix chain ending at node4_ptr.
 	//! node4_ptr is the slot of the freed Node4, node4_status its gate status, and status is GATE_SET
-	//! if the Node4 is the gate or inside one. node4_slot_handle pins the node containing node4_ptr,
-	//! and is released before that node is freed.
+	//! if the Node4 is the gate or inside one. node4_slot_handle pins the node containing node4_ptr:
+	//! the parent inner node, or the tail of the parent's prefix chain. It is empty at the root.
 	static void Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, const uint8_t byte,
 	                   const GateStatus node4_status, const GateStatus status, optional<NodeHandle> node4_slot_handle);
 
@@ -111,9 +111,6 @@ private:
 	                                const idx_t offset);
 	static PrefixHandle AppendByte(ART &art, PrefixHandle prefix, const uint8_t byte);
 	static void Append(ART &art, PrefixHandle prefix, NodePtr other_ptr);
-
-	//! Returns a handle to the tail of the prefix chain, pinning one link at a time.
-	static PrefixHandle GetTail(ART &art, const NodePtr node_ptr);
 
 	static NodeHandle TransformToDeprecatedAppend(NodeHandle tail_handle, ART &art, FixedSizeAllocator &allocator,
 	                                              const uint8_t byte);
