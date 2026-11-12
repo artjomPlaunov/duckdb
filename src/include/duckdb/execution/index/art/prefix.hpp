@@ -43,11 +43,6 @@ public:
 	//! Get a new list of prefix nodes. The node reference holds the child of the last prefix node.
 	static void New(ART &art, reference<NodePtr> &node_ptr_ref, const ARTKey &key, const idx_t depth, idx_t count);
 
-	//! Concatenates parent -> prev_node4 -> child.
-	//! node4_slot_handle pins the node containing node4_ptr; it is released before freeing that node.
-	static void Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
-	                   const GateStatus node4_status, const GateStatus status, optional<NodeHandle> node4_slot_handle);
-
 	//! Removes up to pos bytes from the prefix.
 	//! Shifts all subsequent bytes by pos. Frees empty nodes.
 	static void Reduce(ART &art, NodePtr &node_ptr, const idx_t pos);
@@ -55,11 +50,5 @@ public:
 private:
 	static Prefix NewInternal(ART &art, NodePtr &node_ptr, const data_ptr_t data, const uint8_t count,
 	                          const idx_t offset);
-
-	static void ConcatInternal(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte,
-	                           const GateStatus status, optional<NodeHandle> node4_slot_handle);
-	static void ConcatNode4WasGate(ART &art, NodePtr &node4_ptr, const NodePtr child_ptr, uint8_t byte);
-	static void ConcatChildIsGate(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr,
-	                              uint8_t byte);
 };
 } // namespace duckdb
