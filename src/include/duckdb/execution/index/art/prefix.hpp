@@ -43,10 +43,6 @@ public:
 	//! Get a new list of prefix nodes. The node reference holds the child of the last prefix node.
 	static void New(ART &art, reference<NodePtr> &node_ptr_ref, const ARTKey &key, const idx_t depth, idx_t count);
 
-	//! Removes up to pos bytes from the prefix.
-	//! Shifts all subsequent bytes by pos. Frees empty nodes.
-	static void Reduce(ART &art, NodePtr &node_ptr, const idx_t pos);
-
 private:
 	static Prefix NewInternal(ART &art, NodePtr &node_ptr, const data_ptr_t data, const uint8_t count,
 	                          const idx_t offset);

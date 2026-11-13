@@ -1,5 +1,6 @@
 #include "duckdb/execution/index/art/node_handle.hpp"
 
+#include "duckdb/common/exception.hpp"
 #include "duckdb/execution/index/art/node.hpp"
 #include "duckdb/execution/index/art/prefix_handle.hpp"
 
@@ -78,7 +79,9 @@ void NodePtrHandle::Release() {
 }
 
 NodeHandle NodePtrHandle::TakePin() && {
-	D_ASSERT(node_ptr && handle);
+	if (!handle) {
+		throw InternalException("NodePtrHandle::TakePin requires a pinned handle");
+	}
 	NodeHandle pin(std::move(*handle));
 	Release();
 	return pin;

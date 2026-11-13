@@ -258,6 +258,10 @@ public:
 		// If we need to compress a Node4 into a one-way node,
 		// then we need the previous prefix before the Node4.
 		// The window is fixed-size: pins never accumulate with the depth of the descent.
+		// The window starts at the root, which no node stores, so its handles are unpinned.
+		// Levels above the root alias it: at a root Node4, DeleteChild receives the Node4's own NodePtr as parent_ptr,
+		// which FreeNode clears, so Concat does not take a PREFIX branch. empty_ptr is never read: that would require
+		// the root to be an inlined leaf.
 		NodePtr empty_ptr;
 		auto great_grandparent = NodePtrHandle::Unpinned(empty_ptr);
 		auto grandparent = NodePtrHandle::Unpinned(empty_ptr);

@@ -87,8 +87,10 @@ private:
 };
 
 //! NodePtrHandle refers to a mutable NodePtr and owns the pin on the node storing it.
-//! An unpinned NodePtrHandle refers to storage that the caller keeps valid, e.g., the ART root.
+//! Only ARTOperator can create an unpinned NodePtrHandle, for a NodePtr that no node stores, e.g., the ART root.
 class NodePtrHandle {
+	friend class ARTOperator;
+
 public:
 	NodePtrHandle(const NodePtrHandle &) = delete;
 	NodePtrHandle &operator=(const NodePtrHandle &) = delete;
@@ -96,8 +98,6 @@ public:
 	NodePtrHandle &operator=(NodePtrHandle &&other) noexcept;
 
 public:
-	//! Refers to a NodePtr in storage that the caller keeps valid.
-	static NodePtrHandle Unpinned(NodePtr &node_ptr);
 	//! Refers to the child of the pinned prefix.
 	static NodePtrHandle PrefixChild(const ART &art, NodeHandle &&prefix_handle);
 	//! Refers to the child at byte of the pinned inner node, if it exists.
@@ -111,6 +111,9 @@ public:
 	NodeHandle TakePin() &&;
 
 private:
+	//! Refers to a NodePtr that no node stores. The caller keeps its storage valid.
+	static NodePtrHandle Unpinned(NodePtr &node_ptr);
+
 	NodePtrHandle(NodePtr &node_ptr_p, optional<NodeHandle> handle_p);
 
 private:
