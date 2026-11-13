@@ -168,7 +168,11 @@ public:
 public:
 	//! Insert a child at byte.
 	static void InsertChild(ART &art, NodePtr &node_ptr, const uint8_t byte, const NodePtr child_ptr);
-	//! Delete the child at byte.
+	//! Delete the child at byte of the Node4 that node_ptr_handle's NodePtr points to.
+	//! Takes over node_ptr_handle's pin and releases it before freeing the node that stores its NodePtr.
+	//! The caller must keep the storage containing parent_ptr valid for the duration of the call,
+	//! and must hold no other pins on nodes below parent_ptr, which this call may free.
+	//! At the root, parent_ptr is node_ptr_handle's NodePtr itself.
 	static void DeleteChild(ART &art, NodePtrHandle node_ptr_handle, NodePtr &parent_ptr, const uint8_t byte,
 	                        const GateStatus status);
 

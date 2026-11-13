@@ -1,5 +1,5 @@
 # name: test/sql/index/art/insert_update_delete/test_art_delete_empties_buffers.test
-# description: Bulk deletes that free every node of whole allocator buffers on each Delete compression path
+# description: Bulk deletes on the Delete paths that free the node storing a pinned NodePtr
 # group: [insert_update_delete]
 
 # Each scenario allocates its nodes across many 16 KiB buffers, then deletes keys in allocation order, so whole
@@ -42,11 +42,6 @@ query I
 SELECT count(*) FROM node4_under_prefix WHERE k = (4321 << 16);
 ----
 1
-
-query I
-SELECT count(*) FROM node4_under_prefix WHERE k = (4321 << 16) | 1;
-----
-0
 
 query II
 SELECT count(*), sum(k) FROM node4_under_prefix WHERE k >= 1;

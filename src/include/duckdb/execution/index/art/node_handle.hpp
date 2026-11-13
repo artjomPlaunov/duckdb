@@ -101,9 +101,9 @@ public:
 	NodePtrHandle &operator=(NodePtrHandle &&other) noexcept;
 
 public:
-	//! Refers to the child of the pinned prefix.
+	//! Refers to the child NodePtr of the pinned prefix.
 	static NodePtrHandle PrefixChild(const ART &art, NodeHandle &&prefix_handle);
-	//! Refers to the child at byte of the pinned inner node, if it exists.
+	//! Refers to the NodePtr of the child at byte in the pinned inner node, if it exists.
 	static optional<NodePtrHandle> Child(NodeHandle &&node_handle, const uint8_t byte);
 
 	//! The reference is valid until the handle is released, moved from, or destroyed.

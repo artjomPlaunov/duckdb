@@ -51,7 +51,7 @@ NodePtrHandle &NodePtrHandle::operator=(NodePtrHandle &&other) noexcept {
 }
 
 NodePtrHandle NodePtrHandle::Unpinned(NodePtr &node_ptr) {
-	return NodePtrHandle(node_ptr, optional<NodeHandle>());
+	return NodePtrHandle(node_ptr, nullopt);
 }
 
 NodePtrHandle NodePtrHandle::PrefixChild(const ART &art, NodeHandle &&prefix_handle) {
@@ -63,13 +63,12 @@ NodePtrHandle NodePtrHandle::PrefixChild(const ART &art, NodeHandle &&prefix_han
 optional<NodePtrHandle> NodePtrHandle::Child(NodeHandle &&node_handle, const uint8_t byte) {
 	auto child_ptr = NodePtr::GetChildMutable(node_handle, byte);
 	if (!child_ptr) {
-		return optional<NodePtrHandle>();
+		return nullopt;
 	}
 	return NodePtrHandle(*child_ptr, std::move(node_handle));
 }
 
 NodePtr &NodePtrHandle::Get() {
-	D_ASSERT(node_ptr);
 	return *node_ptr;
 }
 

@@ -257,11 +257,10 @@ public:
 	static bool Delete(ART &art, NodePtr &node_ptr, const ARTKey &key, const ARTKey &row_id) {
 		// If we need to compress a Node4 into a one-way node,
 		// then we need the previous prefix before the Node4.
-		// The window is fixed-size: pins never accumulate with the depth of the descent.
-		// The window starts at the root, which no node stores, so its handles are unpinned.
-		// Levels above the root alias it: at a root Node4, DeleteChild receives the Node4's own NodePtr as parent_ptr,
-		// which FreeNode clears, so Concat does not take a PREFIX branch. empty_ptr is never read: that would require
-		// the root to be an inlined leaf.
+		// The four handles form a fixed-size window: pins never accumulate with the depth of the descent.
+		// parent and current start at the root, which no node stores, so their handles are unpinned.
+		// At a root Node4, DeleteChild thus receives the Node4's own NodePtr as parent_ptr.
+		// empty_ptr is never read: that would require the root to be an inlined leaf.
 		NodePtr empty_ptr;
 		auto great_grandparent = NodePtrHandle::Unpinned(empty_ptr);
 		auto grandparent = NodePtrHandle::Unpinned(empty_ptr);
@@ -312,7 +311,8 @@ public:
 					// PREFIX (greatgrandparent) - Node4 (grandparent) - PREFIX - INLINED_LEAF.
 					// The parent does not have to be passed in, as it is a child of the possibly being compressed N4.
 					// Then, when we delete that child, we also free it.
-					// DeleteChild frees the parent chain and possibly the Node4: release their pins first.
+					// DeleteChild frees the parent chain, and may free the grandparent node by compressing or
+					// shrinking it: release their pins first.
 					current.Release();
 					parent.Release();
 					NodePtr::DeleteChild(art, std::move(grandparent), great_grandparent.Get(),
@@ -334,20 +334,20 @@ public:
 				move_window_down();
 
 				// Traverse a prefix chain until the next non-prefix node or gate,
-				// pinning one link at a time.
-				NodePtr link_ptr = parent.Get();
-				while (link_ptr.GetType() == NType::PREFIX) {
-					NodeHandle link_handle(art, link_ptr);
-					auto data = link_handle.GetPtr();
+				// releasing each prefix node's pin once the next one is pinned.
+				NodePtr prefix_ptr = parent.Get();
+				while (prefix_ptr.GetType() == NType::PREFIX) {
+					NodeHandle prefix_handle(art, prefix_ptr);
+					auto data = prefix_handle.GetPtr();
 					for (idx_t i = 0; i < data[art.PrefixCount()]; i++) {
 						if (data[i] != current_key_ref.get()[depth]) {
 							return false;
 						}
 						depth++;
 					}
-					current = NodePtrHandle::PrefixChild(art, std::move(link_handle));
-					link_ptr = current.Get();
-					if (link_ptr.GetGateStatus() == GateStatus::GATE_SET) {
+					current = NodePtrHandle::PrefixChild(art, std::move(prefix_handle));
+					prefix_ptr = current.Get();
+					if (prefix_ptr.GetGateStatus() == GateStatus::GATE_SET) {
 						break;
 					}
 				}
@@ -360,13 +360,14 @@ public:
 				passed_internal_node = true;
 				move_window_down();
 
-				auto child = NodePtrHandle::Child(NodeHandle(art, parent.Get()), current_key_ref.get()[depth]);
-				if (!child) {
+				auto child_ptr_handle =
+				    NodePtrHandle::Child(NodeHandle(art, parent.Get()), current_key_ref.get()[depth]);
+				if (!child_ptr_handle) {
 					// No child at the byte: nothing to erase.
 					return false;
 				}
 
-				current = std::move(*child);
+				current = std::move(*child_ptr_handle);
 				depth++;
 				break;
 			}
