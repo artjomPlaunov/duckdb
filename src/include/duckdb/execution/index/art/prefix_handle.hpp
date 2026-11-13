@@ -49,12 +49,12 @@ public:
 	static NodePtr Split(ART &art, NodePtr &prefix_ptr, NodePtr &branching_node4_ptr, const uint8_t pos);
 
 	//! Replaces a freed Node4 that had one remaining child: concatenates parent -> byte -> child.
-	//! parent_ptr is the inner node above the Node4, or the head of the prefix chain ending at node4_ptr.
-	//! node4_ptr is the slot of the freed Node4, node4_status its gate status, and status is GATE_SET
-	//! if the Node4 is the gate or inside one. node4_slot_handle pins the node containing node4_ptr:
-	//! the parent inner node, or the tail of the parent's prefix chain. It is empty at the root.
-	static void Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr, const uint8_t byte,
-	                   const GateStatus node4_status, const GateStatus status, optional<NodeHandle> node4_slot_handle);
+	//! parent_ptr is the inner node above the Node4, or the head of the prefix chain ending at the Node4.
+	//! node4_ptr_handle refers to the NodePtr of the freed Node4 and pins the node storing it: the parent
+	//! inner node, or the tail of the parent's prefix chain. It is unpinned at the root.
+	//! node4_status is the Node4's gate status, and status is GATE_SET if the Node4 is the gate or inside one.
+	static void Concat(ART &art, NodePtr &parent_ptr, NodePtrHandle node4_ptr_handle, const NodePtr child_ptr,
+	                   const uint8_t byte, const GateStatus node4_status, const GateStatus status);
 
 	//! Create a new deprecated prefix node and return a handle to it.
 	static NodeHandle NewDeprecated(FixedSizeAllocator &allocator, NodePtr &node_ptr);

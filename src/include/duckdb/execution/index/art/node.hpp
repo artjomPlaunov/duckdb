@@ -145,11 +145,10 @@ public:
 	void ReplaceChild(const ART &art, const uint8_t byte, const NodePtr child_ptr = NodePtr()) const;
 	//! Insert the child at byte.
 	static void InsertChild(ART &art, NodePtr &node_ptr, const uint8_t byte, const NodePtr child_ptr = NodePtr());
-	//! Delete the child at byte.
-	//! slot_handle pins the node containing node_ptr; it is released before any operation that frees that node.
+	//! Delete the child at byte of the node that node_ptr_handle refers to.
 	//! The caller must keep the storage containing parent_ptr valid for the duration of the call.
-	static void DeleteChild(ART &art, NodePtr &node_ptr, NodePtr &parent_ptr, const uint8_t byte,
-	                        const GateStatus status, const ARTKey &row_id, optional<NodeHandle> slot_handle);
+	static void DeleteChild(ART &art, NodePtrHandle node_ptr_handle, NodePtr &parent_ptr, const uint8_t byte,
+	                        const GateStatus status, const ARTKey &row_id);
 
 	//! Get the child node at byte, if it exists.
 	OptionalNodePtr GetChildNode(const ART &art, const uint8_t byte) const;

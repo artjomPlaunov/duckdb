@@ -78,9 +78,8 @@ void PrefixHandle::Append(ART &art, PrefixHandle prefix, NodePtr other_ptr) {
 	prefix.Child(art) = other_ptr;
 }
 
-void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, const NodePtr child_ptr,
-                          const uint8_t byte, const GateStatus node4_status, const GateStatus status,
-                          optional<NodeHandle> node4_slot_handle) {
+void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtrHandle node4_ptr_handle, const NodePtr child_ptr,
+                          const uint8_t byte, const GateStatus node4_status, const GateStatus status) {
 	D_ASSERT(!parent_ptr.IsAnyLeaf());
 	D_ASSERT(child_ptr.HasMetadata());
 
@@ -95,8 +94,8 @@ void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, con
 		if (!node4_was_gate && parent_ptr.GetType() == PREFIX) {
 			// (PREFIX (gate) -> Node4 -> INLINED_LEAF) ==> (INLINED_LEAF)
 			// (INNER_NODE -> PREFIX -> Node4 -> INLINED_LEAF) ==> (INNER_NODE -> INLINED_LEAF)
-			// The freed chain contains node4_ptr, so release its pin first.
-			node4_slot_handle.reset();
+			// The freed chain stores the Node4's NodePtr, so release its pin first.
+			node4_ptr_handle.Release();
 			while (parent_ptr.GetType() == PREFIX) {
 				NodePtr next_ptr;
 				{
@@ -112,7 +111,7 @@ void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, con
 		}
 		// (INNER_NODE -> Node4 -> INLINED_LEAF) ==> (INNER_NODE -> INLINED_LEAF)
 		// (parent -> Node4 (gate) -> INLINED_LEAF) ==> (parent -> INLINED_LEAF)
-		node4_ptr = child_ptr;
+		node4_ptr_handle.Get() = child_ptr;
 		return;
 	}
 
@@ -124,9 +123,8 @@ void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, con
 		// (PREFIX[a] -> Node4 -> PREFIX[c] -> X) ==> (PREFIX[a, byte, c] -> X)
 		// (PREFIX[full] -> Node4 -> X) ==> (PREFIX[full] -> PREFIX[byte] -> X)
 		// (PREFIX[full] -> Node4 -> PREFIX[c] -> X) ==> (PREFIX[full] -> PREFIX[byte, c] -> X)
-		D_ASSERT(node4_slot_handle);
-		PrefixHandle tail(std::move(*node4_slot_handle));
-		D_ASSERT(&tail.Child(art) == &node4_ptr);
+		// The Node4's NodePtr is stored in the tail of the parent's prefix chain, which its handle pins.
+		PrefixHandle tail(std::move(node4_ptr_handle).TakePin());
 		Append(art, AppendByte(art, std::move(tail), byte), child_ptr);
 		return;
 	}
@@ -136,9 +134,9 @@ void PrefixHandle::Concat(ART &art, NodePtr &parent_ptr, NodePtr &node4_ptr, con
 	// (Node4 -> PREFIX[c] -> X) ==> (PREFIX[byte, c] -> X), at the root
 	// (parent -> Node4 (gate) -> X) ==> (parent -> PREFIX[byte] (gate) -> X)
 	// (parent -> Node4 (gate) -> PREFIX[c] -> X) ==> (parent -> PREFIX[byte, c] (gate) -> X)
-	Append(art, NewInternal(art, node4_ptr, &byte, 1, 0), child_ptr);
+	Append(art, NewInternal(art, node4_ptr_handle.Get(), &byte, 1, 0), child_ptr);
 	if (node4_was_gate) {
-		node4_ptr.SetGateStatus(GateStatus::GATE_SET);
+		node4_ptr_handle.Get().SetGateStatus(GateStatus::GATE_SET);
 	}
 }
 

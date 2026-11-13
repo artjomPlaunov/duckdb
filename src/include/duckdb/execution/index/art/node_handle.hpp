@@ -10,6 +10,8 @@
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/helper.hpp"
+#include "duckdb/common/optional.hpp"
+#include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/execution/index/fixed_size_allocator.hpp"
 #include "duckdb/execution/index/fixed_size_buffer.hpp"
 
@@ -82,6 +84,38 @@ public:
 private:
 	SegmentHandle handle;
 	NType type;
+};
+
+//! NodePtrHandle refers to a mutable NodePtr and owns the pin on the node storing it.
+//! An unpinned NodePtrHandle refers to storage that the caller keeps valid, e.g., the ART root.
+class NodePtrHandle {
+public:
+	NodePtrHandle(const NodePtrHandle &) = delete;
+	NodePtrHandle &operator=(const NodePtrHandle &) = delete;
+	NodePtrHandle(NodePtrHandle &&other) noexcept;
+	NodePtrHandle &operator=(NodePtrHandle &&other) noexcept;
+
+public:
+	//! Refers to a NodePtr in storage that the caller keeps valid.
+	static NodePtrHandle Unpinned(NodePtr &node_ptr);
+	//! Refers to the child of the pinned prefix.
+	static NodePtrHandle PrefixChild(const ART &art, NodeHandle &&prefix_handle);
+	//! Refers to the child at byte of the pinned inner node, if it exists.
+	static optional<NodePtrHandle> Child(NodeHandle &&node_handle, const uint8_t byte);
+
+	//! The reference is valid until the handle is released, moved from, or destroyed.
+	NodePtr &Get();
+	//! Releases the pin. Afterwards, the handle no longer refers to a NodePtr.
+	void Release();
+	//! Moves the pin out of a pinned handle and releases the handle.
+	NodeHandle TakePin() &&;
+
+private:
+	NodePtrHandle(NodePtr &node_ptr_p, optional<NodeHandle> handle_p);
+
+private:
+	optional_ptr<NodePtr> node_ptr;
+	optional<NodeHandle> handle;
 };
 
 } // namespace duckdb

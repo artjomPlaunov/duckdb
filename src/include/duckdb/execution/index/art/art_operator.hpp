@@ -257,17 +257,12 @@ public:
 	static bool Delete(ART &art, NodePtr &node_ptr, const ARTKey &key, const ARTKey &row_id) {
 		// If we need to compress a Node4 into a one-way node,
 		// then we need the previous prefix before the Node4.
-		// Each tracked slot reference is backed by a pin on its containing node (empty for caller storage).
 		// The window is fixed-size: pins never accumulate with the depth of the descent.
 		NodePtr empty_ptr;
-		reference<NodePtr> great_grandparent_ptr_ref(empty_ptr);
-		reference<NodePtr> grandparent_ptr_ref(empty_ptr);
-		reference<NodePtr> parent_ptr_ref(node_ptr);
-		reference<NodePtr> current_ptr_ref(node_ptr);
-		optional<NodeHandle> great_grandparent_handle;
-		optional<NodeHandle> grandparent_handle;
-		optional<NodeHandle> parent_handle;
-		optional<NodeHandle> current_handle;
+		auto great_grandparent = NodePtrHandle::Unpinned(empty_ptr);
+		auto grandparent = NodePtrHandle::Unpinned(empty_ptr);
+		auto parent = NodePtrHandle::Unpinned(node_ptr);
+		auto current = NodePtrHandle::Unpinned(node_ptr);
 		reference<const ARTKey> current_key_ref(key);
 
 		idx_t grandparent_depth = 0;
@@ -276,66 +271,68 @@ public:
 		auto status = GateStatus::GATE_NOT_SET;
 		auto passed_internal_node = false;
 
-		while (current_ptr_ref.get().HasMetadata()) {
+		// Moves the window one level down. The caller then sets current.
+		auto shift = [&]() {
+			great_grandparent = std::move(grandparent);
+			grandparent = std::move(parent);
+			parent = std::move(current);
+			grandparent_depth = parent_depth;
+			parent_depth = depth;
+		};
+
+		while (current.Get().HasMetadata()) {
 			// Enter gate.
-			if (status == GateStatus::GATE_NOT_SET && current_ptr_ref.get().GetGateStatus() == GateStatus::GATE_SET) {
+			if (status == GateStatus::GATE_NOT_SET && current.Get().GetGateStatus() == GateStatus::GATE_SET) {
 				status = GateStatus::GATE_SET;
 				current_key_ref = row_id;
 				depth = 0;
 				continue;
 			}
 
-			const auto type = current_ptr_ref.get().GetType();
+			const auto type = current.Get().GetType();
 			switch (type) {
 			case NType::LEAF_INLINED: {
-				if (current_ptr_ref.get().GetRowId() != row_id.GetRowId()) {
+				if (current.Get().GetRowId() != row_id.GetRowId()) {
 					return false;
 				}
-				if (!passed_internal_node && parent_ptr_ref.get().GetType() == NType::PREFIX) {
+				if (!passed_internal_node && parent.Get().GetType() == NType::PREFIX) {
 					// The tree contains exactly one element with a prefix.
-					// The freed chain contains the current slot: release its pin first.
-					current_handle.reset();
-					NodePtr::FreeTree(art, parent_ptr_ref);
+					// The freed chain stores the current NodePtr: release its pin first.
+					current.Release();
+					NodePtr::FreeTree(art, parent.Get());
 					return true;
 				}
-				if (parent_ptr_ref.get().GetType() == NType::PREFIX) {
+				if (parent.Get().GetType() == NType::PREFIX) {
 					// We might have to compress:
 					// PREFIX (greatgrandparent) - Node4 (grandparent) - PREFIX - INLINED_LEAF.
 					// The parent does not have to be passed in, as it is a child of the possibly being compressed N4.
 					// Then, when we delete that child, we also free it.
 					// DeleteChild frees the parent chain and possibly the Node4: release their pins first.
-					current_handle.reset();
-					parent_handle.reset();
-					NodePtr::DeleteChild(art, grandparent_ptr_ref, great_grandparent_ptr_ref,
-					                     current_key_ref.get()[grandparent_depth], status, row_id,
-					                     std::move(grandparent_handle));
+					current.Release();
+					parent.Release();
+					NodePtr::DeleteChild(art, std::move(grandparent), great_grandparent.Get(),
+					                     current_key_ref.get()[grandparent_depth], status, row_id);
 					return true;
 				}
-				// Node4 compression may free the parent node pinned by current_handle: release it first.
-				current_handle.reset();
-				NodePtr::DeleteChild(art, parent_ptr_ref, grandparent_ptr_ref, current_key_ref.get()[parent_depth],
-				                     status, row_id, std::move(parent_handle));
+				// Compressing or shrinking the parent node frees the node pinned by current: release it first.
+				current.Release();
+				NodePtr::DeleteChild(art, std::move(parent), grandparent.Get(), current_key_ref.get()[parent_depth],
+				                     status, row_id);
 				return true;
 			}
 			case NType::LEAF: {
 				D_ASSERT(status == GateStatus::GATE_NOT_SET);
-				Leaf::TransformToNested(art, current_ptr_ref);
+				Leaf::TransformToNested(art, current.Get());
 				break;
 			}
 			case NType::PREFIX: {
-				great_grandparent_ptr_ref = grandparent_ptr_ref;
-				grandparent_ptr_ref = parent_ptr_ref;
-				parent_ptr_ref = current_ptr_ref;
-				great_grandparent_handle = std::move(grandparent_handle);
-				grandparent_handle = std::move(parent_handle);
-				parent_handle = std::move(current_handle);
-				grandparent_depth = parent_depth;
-				parent_depth = depth;
+				shift();
 
 				// Traverse a prefix chain until the next non-prefix node or gate,
 				// pinning one link at a time.
-				while (current_ptr_ref.get().GetType() == NType::PREFIX) {
-					NodeHandle link_handle(art, current_ptr_ref.get());
+				NodePtr link_ptr = parent.Get();
+				while (link_ptr.GetType() == NType::PREFIX) {
+					NodeHandle link_handle(art, link_ptr);
 					auto data = link_handle.GetPtr();
 					for (idx_t i = 0; i < data[art.PrefixCount()]; i++) {
 						if (data[i] != current_key_ref.get()[depth]) {
@@ -343,9 +340,9 @@ public:
 						}
 						depth++;
 					}
-					current_ptr_ref = PrefixHandle::ChildRef(art, link_handle);
-					current_handle = std::move(link_handle);
-					if (current_ptr_ref.get().GetGateStatus() == GateStatus::GATE_SET) {
+					current = NodePtrHandle::PrefixChild(art, std::move(link_handle));
+					link_ptr = current.Get();
+					if (link_ptr.GetGateStatus() == GateStatus::GATE_SET) {
 						break;
 					}
 				}
@@ -356,24 +353,15 @@ public:
 			case NType::NODE_48:
 			case NType::NODE_256: {
 				passed_internal_node = true;
-				great_grandparent_ptr_ref = grandparent_ptr_ref;
-				grandparent_ptr_ref = parent_ptr_ref;
-				parent_ptr_ref = current_ptr_ref;
-				great_grandparent_handle = std::move(grandparent_handle);
-				grandparent_handle = std::move(parent_handle);
-				parent_handle = std::move(current_handle);
-				grandparent_depth = parent_depth;
-				parent_depth = depth;
+				shift();
 
-				NodeHandle node_handle(art, current_ptr_ref.get());
-				auto child_ptr_ref = NodePtr::GetChildMutable(node_handle, current_key_ref.get()[depth]);
-				if (!child_ptr_ref) {
+				auto child = NodePtrHandle::Child(NodeHandle(art, parent.Get()), current_key_ref.get()[depth]);
+				if (!child) {
 					// No child at the byte: nothing to erase.
 					return false;
 				}
 
-				current_ptr_ref = *child_ptr_ref;
-				current_handle = std::move(node_handle);
+				current = std::move(*child);
 				depth++;
 				break;
 			}
@@ -381,9 +369,8 @@ public:
 			case NType::NODE_15_LEAF:
 			case NType::NODE_256_LEAF: {
 				const auto byte = current_key_ref.get()[depth];
-				if (current_ptr_ref.get().HasByte(art, byte)) {
-					NodePtr::DeleteChild(art, current_ptr_ref, parent_ptr_ref, byte, status, row_id,
-					                     std::move(current_handle));
+				if (current.Get().HasByte(art, byte)) {
+					NodePtr::DeleteChild(art, std::move(current), parent.Get(), byte, status, row_id);
 					return true;
 				}
 				return false;

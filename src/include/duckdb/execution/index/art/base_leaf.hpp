@@ -90,9 +90,8 @@ public:
 	//! Insert a byte.
 	static void InsertByte(ART &art, NodePtr &node_ptr, const uint8_t byte);
 	//! Delete a byte.
-	//! slot_handle pins the node containing node_ptr; it is released before any operation that frees that node.
-	static void DeleteByte(ART &art, NodePtr &node_ptr, NodePtr &parent_ptr, const uint8_t byte, const ARTKey &row_id,
-	                       optional<NodeHandle> slot_handle);
+	static void DeleteByte(ART &art, NodePtrHandle node_ptr_handle, NodePtr &parent_ptr, const uint8_t byte,
+	                       const ARTKey &row_id);
 
 private:
 	static void ShrinkNode15Leaf(ART &art, NodePtr &node7_leaf_ptr, NodePtr &node15_leaf_ptr);
