@@ -31,6 +31,7 @@ public:
 public:
 	Prefix() = delete;
 	Prefix(const ART &art, const NodePtr node_ptr, const bool is_mutable = false, const bool set_in_memory = false);
+	Prefix(FixedSizeAllocator &allocator, const NodePtr node_ptr, const idx_t count);
 
 	data_ptr_t data;
 	NodePtr *child_slot;
@@ -43,8 +44,16 @@ public:
 	//! Get a new list of prefix nodes. The node reference holds the child of the last prefix node.
 	static void New(ART &art, reference<NodePtr> &node_ptr_ref, const ARTKey &key, const idx_t depth, idx_t count);
 
+	//! Removes up to pos bytes from the prefix.
+	//! Shifts all subsequent bytes by pos. Frees empty nodes.
+	static void Reduce(ART &art, NodePtr &node_ptr, const idx_t pos);
+
 private:
 	static Prefix NewInternal(ART &art, NodePtr &node_ptr, const data_ptr_t data, const uint8_t count,
 	                          const idx_t offset);
+
+	Prefix Append(ART &art, const uint8_t byte);
+	void Append(ART &art, NodePtr other_ptr);
+	Prefix TransformToDeprecatedAppend(ART &art, FixedSizeAllocator &allocator, uint8_t byte);
 };
 } // namespace duckdb

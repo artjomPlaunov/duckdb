@@ -46,10 +46,6 @@ public:
 	//! is handled internally; the caller does not need to set it after splitting.
 	static NodePtr Split(ART &art, NodePtr &prefix_ptr, NodePtr &branching_node4_ptr, const uint8_t pos);
 
-	//! Removes the bytes up to and including pos from the prefix, and merges any subsequent prefix nodes into it.
-	//! If no bytes remain, frees the prefix and sets node_ptr to its child. The prefix is no longer a gate.
-	static void Reduce(ART &art, NodePtr &node_ptr, const idx_t pos);
-
 	//! Replaces a freed Node4 that had one remaining child: concatenates parent -> byte -> child.
 	//! parent_ptr is the inner node above the Node4, or the head of the prefix chain ending at the Node4.
 	//! node4_ptr_handle refers to the NodePtr that pointed to the freed Node4, which FreeNode cleared.

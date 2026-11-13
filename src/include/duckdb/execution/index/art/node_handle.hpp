@@ -87,6 +87,9 @@ private:
 };
 
 //! NodePtrHandle refers to a mutable NodePtr and owns the pin on the node storing it.
+//! NodeHandle pins the node that a NodePtr points to; NodePtrHandle pins the node that contains the NodePtr.
+//! Use it only to pass a NodePtr to a callee that may free the node storing it, as in Delete: the callee releases
+//! the pin before that free. Otherwise, keep a NodeHandle in scope and use a NodePtr reference, as Insert does.
 //! Only ARTOperator can create an unpinned NodePtrHandle, for a NodePtr that no node stores, e.g., the ART root.
 class NodePtrHandle {
 	friend class ARTOperator;

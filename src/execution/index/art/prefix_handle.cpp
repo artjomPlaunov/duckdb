@@ -192,39 +192,6 @@ NodePtr PrefixHandle::Split(ART &art, NodePtr &prefix_ptr, NodePtr &branching_no
 	return child_ptr;
 }
 
-void PrefixHandle::Reduce(ART &art, NodePtr &node_ptr, const idx_t pos) {
-	D_ASSERT(node_ptr.HasMetadata());
-	D_ASSERT(pos < art.PrefixCount());
-
-	// We always reduce by at least one byte,
-	// thus, if the prefix was a gate, it no longer is.
-	node_ptr.SetGateStatus(GateStatus::GATE_NOT_SET);
-
-	NodePtr child_ptr;
-	{
-		PrefixHandle prefix(NodeHandle(art, node_ptr));
-		const idx_t count = prefix.GetCount(art);
-		D_ASSERT(pos < count);
-		if (pos + 1 != count) {
-			for (idx_t i = 0; i < count - pos - 1; i++) {
-				prefix.SetByte(i, prefix.GetByte(pos + i + 1));
-			}
-			prefix.SetCount(art, UnsafeNumericCast<uint8_t>(count - pos - 1));
-
-			// Merge any subsequent prefix nodes into this prefix.
-			auto next_ptr = prefix.Child(art);
-			Append(art, std::move(prefix), next_ptr);
-			return;
-		}
-		child_ptr = prefix.Child(art);
-	}
-
-	// All bytes of this prefix are removed.
-	// Release the handle before freeing the node, which may destroy the allocator buffer.
-	NodePtr::FreeNode(art, node_ptr);
-	node_ptr = child_ptr;
-}
-
 NodeHandle PrefixHandle::NewDeprecated(FixedSizeAllocator &allocator, NodePtr &node_ptr) {
 	node_ptr = allocator.New();
 	node_ptr.SetMetadata(static_cast<uint8_t>(PREFIX));

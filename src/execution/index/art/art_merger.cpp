@@ -218,7 +218,7 @@ void ARTMerger::MergeNodeAndPrefix(NodePtr &node_ptr, NodePtr &prefix_ptr, const
 	auto child_ptr_ref = node_ptr.GetChildMutableUnsafe(art, byte);
 
 	// Reduce the prefix to the bytes after pos.
-	PrefixHandle::Reduce(art, prefix_ptr, pos);
+	Prefix::Reduce(art, prefix_ptr, pos);
 
 	if (child_ptr_ref) {
 		// Iterate on the child and the remaining prefix.
@@ -283,7 +283,7 @@ void ARTMerger::MergePrefixes(NodeEntry &entry) {
 		NodePtr branching_node4_ptr;
 		Node4::New(art, branching_node4_ptr);
 		auto l_child_ptr = PrefixHandle::Split(art, entry.left_ptr, branching_node4_ptr, split_pos);
-		PrefixHandle::Reduce(art, entry.right_ptr, split_pos);
+		Prefix::Reduce(art, entry.right_ptr, split_pos);
 
 		Node4::InsertChild(art, branching_node4_ptr, l_byte, l_child_ptr);
 		Node4::InsertChild(art, branching_node4_ptr, r_byte, entry.right_ptr);
