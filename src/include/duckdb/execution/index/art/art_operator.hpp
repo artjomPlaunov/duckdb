@@ -275,8 +275,9 @@ public:
 		auto status = GateStatus::GATE_NOT_SET;
 		auto passed_internal_node = false;
 
-		// Moves the window one level down. The caller then sets current.
-		auto shift = [&]() {
+		// Moves the window one level down: each level takes the handle of the level below it, so current becomes the
+		// parent and the great-grandparent's pin is dropped. current is left empty; the caller sets it to a child.
+		auto move_window_down = [&]() {
 			great_grandparent = std::move(grandparent);
 			grandparent = std::move(parent);
 			parent = std::move(current);
@@ -330,7 +331,7 @@ public:
 				break;
 			}
 			case NType::PREFIX: {
-				shift();
+				move_window_down();
 
 				// Traverse a prefix chain until the next non-prefix node or gate,
 				// pinning one link at a time.
@@ -357,7 +358,7 @@ public:
 			case NType::NODE_48:
 			case NType::NODE_256: {
 				passed_internal_node = true;
-				shift();
+				move_window_down();
 
 				auto child = NodePtrHandle::Child(NodeHandle(art, parent.Get()), current_key_ref.get()[depth]);
 				if (!child) {
