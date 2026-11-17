@@ -1069,9 +1069,9 @@ void RowGroupCollection::Update(TransactionData transaction, DuckTableEntry &tab
 
 void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes,
                                            Vector &row_identifiers, idx_t count, IndexRemovalType removal_type,
-                                           optional_idx active_checkpoint) {
-	// Collect all Indexed columns on the table.
-	auto indexed_column_id_set = indexes.GetIndexedColumns();
+                                           transaction_t commit_id, optional_idx active_checkpoint) {
+	// Collect the indexed columns of the indexes added before the commit.
+	auto indexed_column_id_set = indexes.GetIndexedColumns(commit_id);
 
 	// Sorted so that the fetched columns align with the ascending physical order used when
 	// referencing them into result_chunk below.
@@ -1112,7 +1112,7 @@ void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableInd
 		result_chunk.data[j].Reference(Value(types[j]), count_t(fetch_chunk.size()));
 	}
 
-	indexes.RemoveFromIndexes(result_chunk, row_identifiers, removal_type, active_checkpoint);
+	indexes.RemoveFromIndexes(result_chunk, row_identifiers, removal_type, commit_id, active_checkpoint);
 }
 
 void RowGroupCollection::UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry, Vector &row_ids,

@@ -1,0 +1,329 @@
+# name: test/sql/index/art/insert_update_delete/test_art_cleanup_after_create_index.test
+# description: Cleanup of a delete only touches indexes that existed when the delete committed
+# group: [insert_update_delete]
+
+# a second index is created between the delete's commit and its cleanup
+
+statement ok
+CREATE TABLE t AS SELECT range AS i, range % 100 AS j FROM range(10000);
+
+statement ok
+CREATE INDEX idx_old ON t(j);
+
+statement ok con_h
+BEGIN;
+
+query I con_h
+SELECT count(*) FROM t;
+----
+10000
+
+statement ok con_d
+DELETE FROM t WHERE i < 1000;
+
+statement ok
+CREATE INDEX idx_new ON t(j);
+
+# creates the deleted_rows_in_use delta of idx_new
+statement ok con_d
+DELETE FROM t WHERE i >= 5000 AND i < 6000;
+
+# ending the old snapshot runs the cleanup of both deletes
+statement ok con_h
+COMMIT;
+
+statement ok
+DROP INDEX idx_old;
+
+query I
+SELECT count(*) FROM t;
+----
+8000
+
+query II
+EXPLAIN ANALYZE SELECT i FROM t WHERE j = 7;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query I
+SELECT count(*) FROM t WHERE j = 7;
+----
+80
+
+statement ok
+DELETE FROM t WHERE j = 7;
+
+query I
+SELECT count(*) FROM t WHERE j = 7;
+----
+0
+
+# the index is dropped and created again between the delete's commit and its cleanup
+
+statement ok
+CREATE TABLE u AS SELECT range AS i, range % 100 AS j FROM range(10000);
+
+statement ok
+CREATE INDEX idx_u ON u(j);
+
+statement ok con_h
+BEGIN;
+
+query I con_h
+SELECT count(*) FROM u;
+----
+10000
+
+statement ok con_d
+DELETE FROM u WHERE i < 1000;
+
+statement ok
+DROP INDEX idx_u;
+
+statement ok
+CREATE INDEX idx_u ON u(j);
+
+statement ok con_d
+DELETE FROM u WHERE i >= 5000 AND i < 6000;
+
+statement ok con_h
+COMMIT;
+
+query I
+SELECT count(*) FROM u;
+----
+8000
+
+query II
+EXPLAIN ANALYZE SELECT i FROM u WHERE j = 7;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query I
+SELECT count(*) FROM u WHERE j = 7;
+----
+80
+
+# a primary key is added between the delete's commit and its cleanup
+
+statement ok
+CREATE TABLE pk (i INTEGER, j INTEGER UNIQUE);
+
+statement ok
+INSERT INTO pk SELECT range, range FROM range(10000);
+
+statement ok con_h
+BEGIN;
+
+query I con_h
+SELECT count(*) FROM pk;
+----
+10000
+
+statement ok con_d
+DELETE FROM pk WHERE i < 1000;
+
+statement ok
+ALTER TABLE pk ADD PRIMARY KEY (i);
+
+statement ok con_d
+DELETE FROM pk WHERE i >= 5000 AND i < 6000;
+
+statement ok con_h
+COMMIT;
+
+query I
+SELECT count(*) FROM pk;
+----
+8000
+
+query II
+EXPLAIN ANALYZE SELECT i FROM pk WHERE i = 7000;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query I
+SELECT count(*) FROM pk WHERE i = 7000;
+----
+1
+
+statement ok
+INSERT INTO pk VALUES (5500, 5500);
+
+query I
+SELECT count(*) FROM pk WHERE i = 5500;
+----
+1
+
+# the table has no index when the delete commits, and a catalog change keeps the delete for cleanup
+
+statement ok
+CREATE TABLE noidx AS SELECT range AS i, range % 100 AS j FROM range(10000);
+
+statement ok con_h
+BEGIN;
+
+query I con_h
+SELECT count(*) FROM noidx;
+----
+10000
+
+statement ok con_d
+BEGIN;
+
+statement ok con_d
+DELETE FROM noidx WHERE i < 1000;
+
+statement ok con_d
+CREATE TABLE other (x INTEGER);
+
+statement ok con_d
+COMMIT;
+
+statement ok
+CREATE INDEX idx_noidx ON noidx(j);
+
+statement ok con_d
+DELETE FROM noidx WHERE i >= 5000 AND i < 6000;
+
+statement ok con_h
+COMMIT;
+
+query I
+SELECT count(*) FROM noidx;
+----
+8000
+
+query II
+EXPLAIN ANALYZE SELECT i FROM noidx WHERE j = 7;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query I
+SELECT count(*) FROM noidx WHERE j = 7;
+----
+80
+
+# a column is added and indexed between the delete's commit and its cleanup
+
+statement ok
+CREATE TABLE addcol (i INTEGER PRIMARY KEY, j INTEGER);
+
+statement ok
+INSERT INTO addcol SELECT range, range % 100 FROM range(10000);
+
+statement ok con_h
+BEGIN;
+
+query I con_h
+SELECT count(*) FROM addcol;
+----
+10000
+
+statement ok con_d
+DELETE FROM addcol WHERE i < 1000;
+
+statement ok
+ALTER TABLE addcol ADD COLUMN k INTEGER;
+
+statement ok
+CREATE INDEX idx_k ON addcol(k);
+
+statement ok con_h
+COMMIT;
+
+query I
+SELECT count(*) FROM addcol WHERE k IS NULL;
+----
+9000
+
+statement ok
+DELETE FROM addcol WHERE i >= 5000 AND i < 6000;
+
+query I
+SELECT count(*) FROM addcol;
+----
+8000
+
+query I
+SELECT count(*) FROM addcol WHERE i = 7000;
+----
+1
+
+# a delete that is uncommitted when the index is added commits afterwards and removes its rows from it
+
+statement ok
+CREATE TABLE pending AS SELECT range AS i, range % 100 AS j FROM range(10000);
+
+statement ok con_h
+BEGIN;
+
+query I con_h
+SELECT count(*) FROM pending;
+----
+10000
+
+statement ok con_d
+BEGIN;
+
+statement ok con_d
+DELETE FROM pending WHERE i < 1000;
+
+statement ok
+CREATE UNIQUE INDEX idx_pending ON pending(i);
+
+statement ok con_d
+COMMIT;
+
+statement ok con_h
+COMMIT;
+
+statement ok
+INSERT INTO pending VALUES (500, 0);
+
+query I
+SELECT count(*) FROM pending WHERE i = 500;
+----
+1
+
+# the index is created by the oldest transaction, which commits after a delete wrote into the index
+
+statement ok
+CREATE TABLE txn AS SELECT range AS i, range % 100 AS j FROM range(10000);
+
+statement ok
+CREATE INDEX idx_txn_old ON txn(j);
+
+statement ok con_c
+BEGIN;
+
+query I con_c
+SELECT count(*) FROM txn;
+----
+10000
+
+statement ok con_d
+DELETE FROM txn WHERE i < 1000;
+
+statement ok con_c
+CREATE INDEX idx_txn ON txn(j);
+
+statement ok con_d
+DELETE FROM txn WHERE i >= 5000 AND i < 6000;
+
+# committing the oldest transaction runs the cleanup of both deletes
+statement ok con_c
+COMMIT;
+
+statement ok
+DROP INDEX idx_txn_old;
+
+query II
+EXPLAIN ANALYZE SELECT i FROM txn WHERE j = 7;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query I
+SELECT count(*) FROM txn WHERE j = 7;
+----
+80

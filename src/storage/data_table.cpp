@@ -375,8 +375,12 @@ bool DataTable::HasUniqueIndexes() const {
 	return info->indexes.HasUniqueIndexes();
 }
 
-void DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid) {
-	info->indexes.AddIndex(std::move(index), index_oid, ConstraintCheckMode::DEFAULT);
+shared_ptr<IndexEntry> DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid,
+                                           const ConstraintCheckMode check_mode) {
+	// Under the commit lock, commits up to the last commit are finished and later commits see this index.
+	auto commit_lock = db.GetStorageManager().GetCommitLock();
+	auto added_at = DuckTransactionManager::Get(db).GetLastCommit() + 1;
+	return info->indexes.AddIndex(std::move(index), index_oid, check_mode, added_at);
 }
 
 bool DataTable::HasForeignKeyIndex(const vector<PhysicalIndex> &keys, ForeignKeyType type) {
@@ -1273,8 +1277,10 @@ void DataTable::RevertAppend(DuckTransaction &transaction, idx_t start_row, idx_
 // Indexes
 //===--------------------------------------------------------------------===//
 void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-                                  IndexRemovalType removal_type, optional_idx active_checkpoint) {
-	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, active_checkpoint);
+                                  IndexRemovalType removal_type, transaction_t commit_id,
+                                  optional_idx active_checkpoint) {
+	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, commit_id,
+	                              active_checkpoint);
 }
 
 //===--------------------------------------------------------------------===//

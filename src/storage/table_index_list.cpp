@@ -91,11 +91,11 @@ TableIndexList::~TableIndexList() {
 }
 
 shared_ptr<IndexEntry> TableIndexList::AddIndex(unique_ptr<Index> index, idx_t index_oid,
-                                                const ConstraintCheckMode check_mode) {
+                                                const ConstraintCheckMode check_mode, const transaction_t added_at) {
 	D_ASSERT(index);
 	D_ASSERT(index_oid != DConstants::INVALID_INDEX);
 	annotated_lock_guard lock(index_entries_lock);
-	auto index_entry = make_shared_ptr<IndexEntry>(std::move(index), index_oid, check_mode);
+	auto index_entry = make_shared_ptr<IndexEntry>(std::move(index), index_oid, check_mode, added_at);
 	if (index_entry->GetBindState() != IndexBindState::BOUND) {
 		unbound_count++;
 	}
@@ -173,9 +173,14 @@ void TableIndexList::AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids) {
 }
 
 void TableIndexList::RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, const IndexRemovalType removal_type,
-                                       const optional_idx active_checkpoint) {
+                                       const transaction_t commit_id, const optional_idx active_checkpoint) {
 	annotated_lock_guard lock(index_entries_lock);
 	for (const auto &entry : index_entries) {
+		if (entry->AddedAfter(commit_id)) {
+			// added after the commit: the commit never wrote to this index
+			D_ASSERT(removal_type == IndexRemovalType::DELETED_ROWS_IN_USE);
+			continue;
+		}
 		entry->RemoveFromIndex(chunk, row_ids, removal_type, active_checkpoint);
 	}
 }
@@ -494,10 +499,13 @@ void TableIndexList::VerifyForeignKey(optional_ptr<const TableIndexList> delete_
 	entry->VerifyForeignKey(delete_entry, chunk, conflict_manager);
 }
 
-unordered_set<column_t> TableIndexList::GetIndexedColumns() const {
+unordered_set<column_t> TableIndexList::GetIndexedColumns(const transaction_t commit_id) const {
 	annotated_lock_guard lock(index_entries_lock);
 	unordered_set<column_t> column_ids;
 	for (const auto &entry : index_entries) {
+		if (entry->AddedAfter(commit_id)) {
+			continue;
+		}
 		auto index_info = entry->GetStorageInfo();
 		column_ids.insert(index_info.column_set.begin(), index_info.column_set.end());
 	}

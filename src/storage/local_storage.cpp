@@ -593,7 +593,7 @@ idx_t LocalStorage::Delete(Context &context, DataTable &table, DuckTableEntry &t
 	if (!deleted_ids.has_skipped_rows) {
 		// all rows were deleted
 		storage->GetCollection().RemoveFromIndexes(context, storage->append_indexes, row_ids, count,
-		                                           IndexRemovalType::MAIN_INDEX_ONLY);
+		                                           IndexRemovalType::MAIN_INDEX_ONLY, MAX_COMMIT_ID);
 		return delete_count;
 	}
 	auto &deleted_row_ids = deleted_ids.row_ids;
@@ -606,7 +606,8 @@ idx_t LocalStorage::Delete(Context &context, DataTable &table, DuckTableEntry &t
 			}
 		}
 		storage->GetCollection().RemoveFromIndexes(context, storage->append_indexes, deleted_row_id_vector,
-		                                           deleted_row_ids.size(), IndexRemovalType::MAIN_INDEX_ONLY);
+		                                           deleted_row_ids.size(), IndexRemovalType::MAIN_INDEX_ONLY,
+		                                           MAX_COMMIT_ID);
 	}
 	return delete_count;
 }

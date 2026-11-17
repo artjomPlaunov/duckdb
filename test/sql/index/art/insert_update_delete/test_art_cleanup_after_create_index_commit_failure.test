@@ -1,0 +1,145 @@
+# name: test/sql/index/art/insert_update_delete/test_art_cleanup_after_create_index_commit_failure.test
+# description: Failed commits around CREATE INDEX while deletes wait for cleanup
+# group: [insert_update_delete]
+
+require skip_reload
+
+require no_alternative_verify
+
+statement ok
+CREATE TABLE t AS SELECT range AS i, range % 100 AS j FROM range(10000);
+
+statement ok
+CREATE INDEX idx_old ON t(j);
+
+statement ok con_h
+BEGIN;
+
+query I con_h
+SELECT count(*) FROM t;
+----
+10000
+
+# CF1: a delete's commit fails after it walked the index published just before it
+statement ok con_d
+BEGIN;
+
+statement ok con_d
+DELETE FROM t WHERE i < 1000;
+
+statement ok
+CREATE INDEX idx_new ON t(j);
+
+statement ok
+SET debug_force_commit_failure = true;
+
+statement error con_d
+COMMIT;
+----
+Forced commit failure
+
+statement ok
+SET debug_force_commit_failure = false;
+
+query I
+SELECT count(*) FROM t;
+----
+10000
+
+query I
+SELECT count(*) FROM t WHERE j = 7;
+----
+100
+
+# the failed delete's rows are deleted again for real
+statement ok con_d
+DELETE FROM t WHERE i < 1000;
+
+# CF2: the CREATE INDEX transaction itself fails to commit after a delete moved rows into its delta
+statement ok con_c
+BEGIN;
+
+statement ok con_c
+CREATE INDEX idx_tmp ON t(j);
+
+statement ok con_d
+DELETE FROM t WHERE i >= 2000 AND i < 3000;
+
+statement ok
+SET debug_force_commit_failure = true;
+
+statement error con_c
+COMMIT;
+----
+Forced commit failure
+
+statement ok
+SET debug_force_commit_failure = false;
+
+# CF3: after the failed CREATE INDEX, create one again before the pending cleanups run
+statement ok
+CREATE INDEX idx_tmp ON t(j);
+
+statement ok con_d
+DELETE FROM t WHERE i >= 3000 AND i < 4000;
+
+# CF4: a failed delete commit with idx_tmp published after the earlier deletes
+statement ok con_d
+BEGIN;
+
+statement ok con_d
+DELETE FROM t WHERE i >= 4000 AND i < 5000;
+
+statement ok
+SET debug_force_commit_failure = true;
+
+statement error con_d
+COMMIT;
+----
+Forced commit failure
+
+statement ok
+SET debug_force_commit_failure = false;
+
+statement ok con_h
+COMMIT;
+
+query I
+SELECT count(*) FROM t;
+----
+7000
+
+query I
+SELECT count(*) FROM t WHERE j = 7;
+----
+70
+
+query I
+SELECT count(*) FROM t WHERE i >= 4000 AND i < 5000;
+----
+1000
+
+query I
+SELECT count(*) FROM t WHERE j = 7 AND i >= 4000 AND i < 5000;
+----
+10
+
+# all indexes still accept deletes
+statement ok
+DELETE FROM t WHERE i >= 4000 AND i < 5000;
+
+query I
+SELECT count(*) FROM t WHERE j = 7;
+----
+60
+
+statement ok
+DROP INDEX idx_tmp;
+
+statement ok
+DROP INDEX idx_new;
+
+query I
+SELECT count(*) FROM t WHERE j = 7;
+----
+60
