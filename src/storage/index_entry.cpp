@@ -14,8 +14,10 @@
 
 namespace duckdb {
 
-IndexEntry::IndexEntry(unique_ptr<Index> index_p, idx_t index_oid_p, const ConstraintCheckMode check_mode_p)
-    : index_oid(index_oid_p), owned_index(std::move(index_p)), check_mode(check_mode_p) {
+IndexEntry::IndexEntry(unique_ptr<Index> index_p, idx_t index_oid_p, const ConstraintCheckMode check_mode_p,
+                       transaction_t maintained_after_p)
+    : index_oid(index_oid_p), maintained_after(maintained_after_p), owned_index(std::move(index_p)),
+      check_mode(check_mode_p) {
 	if (owned_index->IsBound()) {
 		bind_state = IndexBindState::BOUND;
 	} else {
@@ -121,10 +123,11 @@ void IndexEntry::InitializeLocalIndexesInternal(TableIndexList &delete_indexes,
 	}
 
 	auto constraint_type = bound_index.GetConstraintType();
-	delete_indexes.AddIndex(bound_index.CreateEmptyCopy(constraint_type), index_oid, ConstraintCheckMode::DEFAULT);
+	delete_indexes.AddIndex(bound_index.CreateEmptyCopy(constraint_type), index_oid, ConstraintCheckMode::DEFAULT, 0);
 	// Deferred constraints have no append index: transaction-local rows are verified when committing.
 	if (append_indexes && !IsDeferred()) {
-		append_indexes->AddIndex(bound_index.CreateEmptyCopy(constraint_type), index_oid, ConstraintCheckMode::DEFAULT);
+		append_indexes->AddIndex(bound_index.CreateEmptyCopy(constraint_type), index_oid, ConstraintCheckMode::DEFAULT,
+		                         0);
 	}
 }
 

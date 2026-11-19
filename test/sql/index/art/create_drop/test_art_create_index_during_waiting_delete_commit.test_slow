@@ -1,0 +1,95 @@
+# name: test/sql/index/art/create_drop/test_art_create_index_during_waiting_delete_commit.test_slow
+# description: A DELETE commit waiting for the commit lock while CREATE INDEX finishes keeps the row for older snapshots
+# group: [create_drop]
+
+# in the unittest's database con_h's large commit otherwise takes the automatic-checkpoint path, and con_x's
+# CREATE INDEX then waits for the whole commit (the window is missed)
+statement ok
+SET checkpoint_threshold = '1TB';
+
+statement ok
+CREATE TABLE accounts(account_id INTEGER, balance INTEGER);
+
+statement ok
+INSERT INTO accounts SELECT i, i FROM range(10) r(i);
+
+statement ok
+CREATE TABLE ledger(entry UBIGINT);
+
+statement ok
+CREATE INDEX idx_ledger ON ledger(entry);
+
+concurrentforeach role con_h con_d con_x
+
+# con_h: its COMMIT appends 10M random keys to idx_ledger under the commit lock (about 3 s on reldebug)
+onlyif role=con_h
+statement ok
+BEGIN;
+
+onlyif role=con_h
+statement ok
+INSERT INTO ledger SELECT hash(i) FROM range(10000000) r(i);
+
+# wait until con_d and con_x are open, so con_h's commit does not checkpoint
+onlyif role=con_h
+sleep 300 millisecond
+
+onlyif role=con_h
+statement ok
+COMMIT;
+
+# con_x: snapshot taken before con_d commits
+onlyif role=con_x
+statement ok
+BEGIN;
+
+onlyif role=con_x
+query I
+SELECT count(*) FROM accounts;
+----
+10
+
+# con_d: commits while con_h holds the commit lock (accounts has no index yet when con_d's COMMIT starts)
+onlyif role=con_d
+statement ok
+BEGIN;
+
+onlyif role=con_d
+statement ok
+DELETE FROM accounts WHERE account_id = 5;
+
+onlyif role=con_d
+sleep 800 millisecond
+
+onlyif role=con_d
+statement ok
+COMMIT;
+
+# con_x: creates the index while con_d waits for the commit lock, then reads after con_d finished
+onlyif role=con_x
+sleep 1300 millisecond
+
+onlyif role=con_x
+statement ok
+CREATE INDEX idx_new ON accounts(account_id);
+
+onlyif role=con_x
+sleep 5000 millisecond
+
+onlyif role=con_x
+query II
+SELECT account_id, balance FROM accounts WHERE balance = 5;
+----
+5	5
+
+onlyif role=con_x
+query II
+SELECT account_id, balance FROM accounts WHERE account_id = 5;
+----
+5	5
+
+onlyif role=con_x
+statement ok
+COMMIT;
+
+endloop

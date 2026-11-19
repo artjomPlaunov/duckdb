@@ -42,7 +42,8 @@ public:
 	//! Iterates over shared ownership of stable index entries while holding the entry-list lock.
 	TableIndexIterationHelper<shared_ptr<IndexEntry>> IndexEntries() const;
 	//! Adds an index entry to the list of index entries, and returns it.
-	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode);
+	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode,
+	                                transaction_t maintained_after);
 	//! Initializes the transaction-local delete and append indexes.
 	void InitializeLocalIndexes(TableIndexList &delete_indexes, TableIndexList &append_indexes) const;
 	//! Appends a chunk to all index entries.
@@ -56,8 +57,8 @@ public:
 	void RevertAppend(DataChunk &chunk, row_t row_start);
 	//! Appends deleted rows to all unique indexes.
 	void AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids);
-	//! Applies a removal or removal rollback to all index entries.
-	void RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, IndexRemovalType removal_type,
+	//! Applies a removal or removal rollback to the index entries maintained by the commit with this id.
+	void RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, transaction_t commit_id, IndexRemovalType removal_type,
 	                       optional_idx active_checkpoint = optional_idx());
 	//! Removes an index entry from the list of index entries and release any storage the index owns.
 	void RemoveIndex(idx_t index_oid);
@@ -126,8 +127,8 @@ public:
 	                      DataChunk &chunk, ConflictManager &conflict_manager);
 	//! Persist index buffers and install replacements before returning their metadata.
 	vector<shared_ptr<const IndexStorageInfo>> Checkpoint(TableIndexWriter &writer);
-	//! Returns the physical table columns referenced by any index.
-	unordered_set<column_t> GetIndexedColumns() const;
+	//! Returns the physical table columns of the indexes maintained by the commit with this id (by default all).
+	unordered_set<column_t> GetIndexedColumns(transaction_t commit_id = MAX_TRANSACTION_ID) const;
 	//! Returns the column sets of unique indexes matching the conflict target.
 	vector<unordered_set<column_t>> GetConflictTargetColumns(const ConflictInfo &conflict_info) const;
 	//! Get the combined column ids of the unique indexes.

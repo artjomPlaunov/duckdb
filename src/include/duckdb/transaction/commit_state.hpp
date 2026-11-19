@@ -69,6 +69,10 @@ public:
 
 	void PushDelete(DeleteInfo &info);
 	void Verify();
+	//! Whether the removals kept rows in deleted_rows_in_use, which the cleanup of the transaction removes
+	bool KeptDeletedIndexRows() const {
+		return kept_deleted_index_rows;
+	}
 
 private:
 	void Flush(DataTable &table, row_t *row_numbers, idx_t count);
@@ -79,6 +83,7 @@ private:
 	QueryContext context;
 	//! While committing, we remove data from any indexes that was deleted
 	IndexRemovalType removal_type;
+	bool kept_deleted_index_rows = false;
 	DataChunk chunk;
 	//! Debug mode only - list of indexes to verify
 	reference_map_t<DataTable, shared_ptr<DataTableInfo>> verify_indexes;
@@ -94,6 +99,9 @@ public:
 	void RevertCommit(UndoFlags type, data_ptr_t data);
 	void Flush();
 	void Verify();
+	bool KeptDeletedIndexRows() const {
+		return index_data_remover.KeptDeletedIndexRows();
+	}
 	static IndexRemovalType GetIndexRemovalType(ActiveTransactionState transaction_state, CommitMode commit_mode);
 
 private:

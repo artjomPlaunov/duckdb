@@ -131,9 +131,6 @@ UndoBufferProperties UndoBuffer::GetProperties() {
 			if (info->is_consecutive) {
 				properties.estimated_size += sizeof(row_t) * info->count;
 			}
-			if (info->table->GetStorage().HasIndexes()) {
-				properties.has_index_deletes = true;
-			}
 			properties.has_deletes = true;
 			break;
 		}
@@ -198,6 +195,7 @@ void UndoBuffer::Commit(UndoBuffer::IteratorState &iterator_state, CommitInfo &i
 	CommitState state(transaction, info.commit_id, active_transaction_state, CommitMode::COMMIT);
 	IterateEntries(iterator_state, [&](UndoFlags type, data_ptr_t data) { state.CommitEntry(type, data, info); });
 	state.Verify();
+	info.kept_deleted_index_rows = state.KeptDeletedIndexRows();
 }
 
 void UndoBuffer::RevertCommit(UndoBuffer::IteratorState &end_state, transaction_t transaction_id) {

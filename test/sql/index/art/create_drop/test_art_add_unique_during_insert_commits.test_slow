@@ -1,0 +1,37 @@
+# name: test/sql/index/art/create_drop/test_art_add_unique_during_insert_commits.test_slow
+# description: ALTER TABLE ADD UNIQUE while another connection commits inserts leaves the database usable
+# group: [create_drop]
+
+statement ok
+CREATE TABLE t AS SELECT range AS c0, range AS c1, range AS c2, range AS c3, range AS c4, range AS c5, range AS c6, range AS c7, range AS c8, range AS c9 FROM range(2000000);
+
+# thread 0 adds ten UNIQUE constraints one after the other, thread 1 commits forty 100,000-row inserts (autocommit);
+# a transaction conflict is a legal outcome for either side, a FATAL / INTERNAL error or an invalidation is not
+concurrentloop threadid 0 2
+
+loop j 0 10
+
+onlyif threadid=0
+statement maybe
+ALTER TABLE t ADD UNIQUE (c{j});
+----
+<!REGEX>:.*(FATAL|INTERNAL|invalidated).*
+
+endloop
+
+loop i 0 40
+
+onlyif threadid=1
+statement maybe
+INSERT INTO t SELECT r, r, r, r, r, r, r, r, r, r FROM (SELECT 10000000 + {i} * 100000 + range AS r FROM range(100000));
+----
+<!REGEX>:.*(FATAL|INTERNAL|invalidated).*
+
+endloop
+
+endloop
+
+query I
+SELECT count(*) >= 2000000 FROM t;
+----
+true

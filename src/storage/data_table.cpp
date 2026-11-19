@@ -393,8 +393,11 @@ bool DataTable::HasUniqueIndexes() const {
 	return info->indexes.HasUniqueIndexes();
 }
 
-void DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid) {
-	info->indexes.AddIndex(std::move(index), index_oid, ConstraintCheckMode::DEFAULT);
+shared_ptr<IndexEntry> DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode) {
+	// publish between commits: a commit reads the index list several times under the commit lock
+	auto commit_lock = db.GetStorageManager().GetCommitLock();
+	auto maintained_after = DuckTransactionManager::Get(db).GetLastCommit();
+	return info->indexes.AddIndex(std::move(index), index_oid, check_mode, maintained_after);
 }
 
 bool DataTable::HasForeignKeyIndex(const vector<PhysicalIndex> &keys, ForeignKeyType type) {
@@ -1291,8 +1294,10 @@ void DataTable::RevertAppend(DuckTransaction &transaction, idx_t start_row, idx_
 // Indexes
 //===--------------------------------------------------------------------===//
 void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-                                  IndexRemovalType removal_type, optional_idx active_checkpoint) {
-	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, active_checkpoint);
+                                  transaction_t commit_id, IndexRemovalType removal_type,
+                                  optional_idx active_checkpoint) {
+	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, commit_id, removal_type,
+	                              active_checkpoint);
 }
 
 //===--------------------------------------------------------------------===//
@@ -1783,7 +1788,7 @@ void DataTable::AddIndex(const ColumnList &columns, const vector<LogicalIndex> &
 	auto &io_manager = TableIOManager::Get(*this);
 	auto art = make_uniq<ART>(index_info.name, type, physical_ids, io_manager, std::move(expressions), db, nullptr,
 	                          index_info);
-	info->indexes.AddIndex(std::move(art), index_oid, check_mode);
+	info->indexes.AddIndex(std::move(art), index_oid, check_mode, 0);
 }
 
 } // namespace duckdb

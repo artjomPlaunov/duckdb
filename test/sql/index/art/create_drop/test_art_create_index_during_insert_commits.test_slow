@@ -1,0 +1,35 @@
+# name: test/sql/index/art/create_drop/test_art_create_index_during_insert_commits.test_slow
+# description: CREATE INDEX on a column no other index covers while another connection commits inserts
+# group: [create_drop]
+
+statement ok
+CREATE TABLE t(a BIGINT, b BIGINT);
+
+statement ok
+CREATE INDEX idx_a ON t(a);
+
+# thread 0 creates and drops idx_b on b, thread 1 commits 100,000-row inserts (autocommit), 40 times each
+concurrentloop threadid 0 2
+
+loop i 0 40
+
+onlyif threadid=0
+statement ok
+CREATE INDEX idx_b ON t(b);
+
+onlyif threadid=0
+statement ok
+DROP INDEX idx_b;
+
+onlyif threadid=1
+statement ok
+INSERT INTO t SELECT range, range FROM range(100000);
+
+endloop
+
+endloop
+
+query I
+SELECT count(*) FROM t;
+----
+4000000

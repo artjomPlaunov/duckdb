@@ -209,8 +209,8 @@ public:
 	//! Merge a row group collection directly into this table - appending it to the end of the table without copying
 	void MergeStorage(RowGroupCollection &data, optional_ptr<StorageCommitState> commit_state);
 
-	//! Remove the row identifiers from all the indexes of the table
-	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
+	//! Remove the row identifiers from the indexes of the table that the commit with this id maintains
+	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count, transaction_t commit_id,
 	                       IndexRemovalType removal_type, optional_idx checkpoint_id = optional_idx());
 
 	void SetAsMainTable() {
@@ -301,8 +301,9 @@ public:
 	//! It is either empty, or initialized via its index storage information.
 	void AddIndex(const ColumnList &columns, const vector<LogicalIndex> &column_indexes, const IndexConstraintType type,
 	              IndexStorageInfo index_info, idx_t index_oid, ConstraintCheckMode check_mode);
-	//! AddIndex moves an index to this table's index list.
-	void AddIndex(unique_ptr<Index> index, idx_t index_oid);
+	//! Adds an index to this table's index list and returns its entry; waits for any commit in progress.
+	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid,
+	                                ConstraintCheckMode check_mode = ConstraintCheckMode::DEFAULT);
 
 	//! Returns a list of the partition stats
 	vector<PartitionStatistics> GetPartitionStats(ClientContext &context);

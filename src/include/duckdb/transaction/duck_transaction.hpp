@@ -32,6 +32,8 @@ struct CommitInfo {
 	optional_ptr<CommitDropState> drop_state;
 	//! WAL offset covering the commit's flush marker (0 if no WAL was written)
 	idx_t wal_sync_offset = 0;
+	//! Whether the undo walk kept removed index rows for older snapshots, which the cleanup removes later
+	bool kept_deleted_index_rows = false;
 };
 
 class DuckTransaction : public Transaction {
