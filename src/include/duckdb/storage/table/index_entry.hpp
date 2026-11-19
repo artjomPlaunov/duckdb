@@ -203,13 +203,9 @@ public:
 	idx_t GetIndexOid() const {
 		return index_oid;
 	}
-	//! Whether the index was added before the commit with this id.
-	bool AddedBefore(transaction_t commit_id) const {
-		return commit_id > added_after_commit;
-	}
-	//! Whether a snapshot can scan the index: it sees every commit the index was built from.
-	bool ScannableBy(VisibilityBound visibility_bound) const {
-		return added_after_commit < visibility_bound;
+	//! Whether the index was added before the bound: every commit the index was built from is below it.
+	bool AddedBefore(VisibilityBound bound) const {
+		return added_after_commit < bound;
 	}
 
 private:

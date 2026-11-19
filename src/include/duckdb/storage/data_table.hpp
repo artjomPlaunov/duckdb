@@ -211,10 +211,9 @@ public:
 	//! Merge a row group collection directly into this table - appending it to the end of the table without copying
 	void MergeStorage(RowGroupCollection &data, optional_ptr<StorageCommitState> commit_state);
 
-	//! Remove the row identifiers from the indexes of the table added before the commit with this id
+	//! Remove the row identifiers from the indexes of the table added before the bound
 	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-	                       IndexRemovalType removal_type, optional_idx checkpoint_id = optional_idx(),
-	                       transaction_t commit_id = MAX_TRANSACTION_ID);
+	                       IndexRemovalType removal_type, optional_idx checkpoint_id, VisibilityBound bound);
 
 	void SetAsMainTable() {
 		this->version = DataTableVersion::MAIN_TABLE;
@@ -267,7 +266,7 @@ public:
 	                           vector<ColumnSegmentInfo> &result);
 
 	//! Scans the next chunk for the CREATE INDEX operator, as of the build point if the build catches up
-	bool CreateIndexScan(TableScanState &state, DataChunk &result, optional_ptr<const IndexBuildLog> build = nullptr);
+	bool CreateIndexScan(TableScanState &state, DataChunk &result, optional_ptr<const IndexBuildLog> build);
 	//! Initialize constraint verification state
 	unique_ptr<ConstraintState> InitializeConstraintState(TableCatalogEntry &table,
 	                                                      const vector<unique_ptr<BoundConstraint>> &bound_constraints);
@@ -311,7 +310,6 @@ public:
 	                                ConstraintCheckMode check_mode);
 	//! Starts an index build over these columns: later commits log the rows they change for it
 	shared_ptr<IndexBuildLog> RegisterIndexBuild(DuckTransaction &creator, unordered_set<column_t> column_ids);
-	void UnregisterIndexBuild(const IndexBuildLog &build);
 
 	//! Returns a list of the partition stats
 	vector<PartitionStatistics> GetPartitionStats(ClientContext &context);

@@ -32,6 +32,10 @@ public:
 public:
 	//! How the build scans the table: the rows live after the build commit, seen by the creator
 	ScanOptions GetScanOptions() const;
+	//! The table columns of the index
+	const unordered_set<column_t> &GetColumnIds() const {
+		return column_ids;
+	}
 	//! The last commit whose changes the built index holds
 	transaction_t GetCaughtUpCommit() const {
 		return caught_up_commit;
@@ -41,13 +45,7 @@ public:
 
 	//! Logs consecutive rows that a commit appended or deleted
 	void LogRows(transaction_t commit_id, row_t row_start, idx_t count);
-	//! Logs the rows at these offsets from base_row that a commit deleted
-	void LogRows(transaction_t commit_id, row_t base_row, const uint16_t *rows, idx_t count);
-	//! Logs a committed update of a column
-	void LogUpdate(transaction_t commit_id, column_t column_id);
-
-	//! Takes the rows that the commits up to and including this one changed, as sorted, disjoint ranges. Throws if
-	//! one of them updated an indexed column.
+	//! Takes the rows that the commits up to and including this one changed, as sorted, disjoint ranges
 	vector<RowRange> TakeChanges(transaction_t commit_id);
 	//! Marks the changes up to and including this commit as caught up on
 	void SetCaughtUp(transaction_t commit_id);
@@ -55,19 +53,14 @@ public:
 private:
 	struct LoggedRows {
 		transaction_t commit_id;
-		row_t row_start;
-		idx_t count;
+		RowRange rows;
 	};
 
-	const transaction_t build_commit;
 	const unordered_set<column_t> column_ids;
 	transaction_t caught_up_commit;
 
 	mutable mutex lock;
 	vector<LoggedRows> logged_rows;
-	idx_t pending_rows = 0;
-	//! The first commit that updated an indexed column, if any
-	transaction_t first_update_commit = MAX_TRANSACTION_ID;
 };
 
 } // namespace duckdb

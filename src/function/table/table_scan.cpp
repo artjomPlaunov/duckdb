@@ -363,7 +363,7 @@ public:
 
 	~DuckTableScanState() override {
 		if (index_build) {
-			storage.UnregisterIndexBuild(*index_build);
+			storage.GetDataTableInfo()->GetIndexes().RemoveIndexBuild(*index_build);
 		}
 	}
 
@@ -1168,7 +1168,7 @@ unique_ptr<GlobalTableFunctionState> TableScanInitGlobal(ClientContext &context,
 		if (entry->GetBindState() != IndexBindState::BOUND || entry->GetIndexType() != ART::TYPE_NAME) {
 			continue;
 		}
-		if (!entry->ScannableBy(transaction.view.visibility_bound)) {
+		if (!entry->AddedBefore(transaction.view.visibility_bound)) {
 			// the index lacks rows that this older snapshot still sees
 			continue;
 		}

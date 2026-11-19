@@ -125,7 +125,8 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 	// If there is any issue with removal, a FatalException must be thrown since there may be a corruption of
 	// data, hence the transaction cannot be guaranteed.
 	try {
-		table.RemoveFromIndexes(context, row_identifiers, count, removal_type, checkpoint_id, transaction.commit_id);
+		table.RemoveFromIndexes(context, row_identifiers, count, removal_type, checkpoint_id,
+		                        VisibilityBound::Before(transaction.commit_id));
 	} catch (std::exception &ex) {
 		throw FatalException(ErrorData(ex).Message());
 	} catch (...) {
@@ -401,8 +402,7 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			throw TransactionException("Attempting to modify table %s but another transaction has %s this table",
 			                           table_name, table_modification);
 		}
-		auto &indexes = info->table->GetStorage().GetDataTableInfo()->GetIndexes();
-		if (!indexes.Empty() && indexes.GetIndexedColumns().count(info->column_index)) {
+		if (IsIndexedColumn(*info)) {
 			// updates of indexed columns run as a delete and an insert: this one was planned before the index existed
 			auto table_name = info->table->GetStorage().GetTableName();
 			throw TransactionException("Attempting to modify table %s but another transaction has created an index on "
@@ -410,7 +410,6 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			                           table_name);
 		}
 		info->version_number = commit_id;
-		indexes.ForEachIndexBuild([&](IndexBuildLog &build) { build.LogUpdate(commit_id, info->column_index); });
 		break;
 	}
 	case UndoFlags::UPDATE_ROWS: {
@@ -429,14 +428,41 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 
 void CommitState::LogDeleteForIndexBuilds(DeleteInfo &info) {
 	auto &indexes = info.table->GetStorage().GetDataTableInfo()->GetIndexes();
-	auto base_row = UnsafeNumericCast<row_t>(info.base_row);
 	indexes.ForEachIndexBuild([&](IndexBuildLog &build) {
-		if (info.is_consecutive) {
-			build.LogRows(commit_id, base_row, info.count);
-		} else {
-			build.LogRows(commit_id, base_row, info.GetRows(), info.count);
+		auto row_start = UnsafeNumericCast<row_t>(info.base_row);
+		idx_t count = info.count;
+		if (!info.is_consecutive) {
+			// log the span of the deleted rows: the catch-up skips the rows in it that did not change
+			auto rows = info.GetRows();
+			auto first = rows[0];
+			auto last = rows[0];
+			for (idx_t i = 1; i < info.count; i++) {
+				first = MinValue(first, rows[i]);
+				last = MaxValue(last, rows[i]);
+			}
+			row_start += first;
+			count = idx_t(last - first) + 1;
 		}
+		build.LogRows(commit_id, row_start, count);
 	});
+}
+
+bool CommitState::IsIndexedColumn(UpdateInfo &info) {
+	auto &storage = info.table->GetStorage();
+	if (!storage.db.GetStorageManager().IsLoaded()) {
+		// a replayed update committed before any later index existed
+		return false;
+	}
+	if (indexed_columns_table.get() != &storage) {
+		// publishing an index or starting a build takes the commit lock: the columns can only shrink during the commit
+		indexed_columns_table = storage;
+		auto &indexes = storage.GetDataTableInfo()->GetIndexes();
+		indexed_columns = indexes.GetIndexedColumns();
+		indexes.ForEachIndexBuild([&](IndexBuildLog &build) {
+			indexed_columns.insert(build.GetColumnIds().begin(), build.GetColumnIds().end());
+		});
+	}
+	return indexed_columns.count(info.column_index) > 0;
 }
 
 void CommitState::CommitDelete(DeleteInfo &info, transaction_t old_id) {

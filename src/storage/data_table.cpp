@@ -406,18 +406,12 @@ shared_ptr<IndexBuildLog> DataTable::RegisterIndexBuild(DuckTransaction &creator
 	return build;
 }
 
-void DataTable::UnregisterIndexBuild(const IndexBuildLog &build) {
-	info->indexes.RemoveIndexBuild(build);
-}
-
 void DataTable::CatchUpIndexBuild(IndexBuildLog &build, BoundIndex &index, transaction_t commit_id) {
 	auto ranges = build.TakeChanges(commit_id);
 	if (!ranges.empty()) {
 		TransactionData before(MAX_TRANSACTION_ID, VisibilityBound::Through(build.GetCaughtUpCommit()));
 		TransactionData after(MAX_TRANSACTION_ID, VisibilityBound::Through(commit_id));
-		// remove the deleted rows first: a key that moved to another row is never in a unique index twice
-		row_groups->ApplyIndexBuildRows(index, ranges, before, after, false);
-		row_groups->ApplyIndexBuildRows(index, ranges, after, before, true);
+		row_groups->CatchUpIndex(index, ranges, before, after);
 	}
 	build.SetCaughtUp(commit_id);
 }
@@ -433,11 +427,16 @@ shared_ptr<IndexEntry> DataTable::AddIndex(DuckTransaction &creator, unique_ptr<
                                            ConstraintCheckMode check_mode) {
 	auto build = info->indexes.FindIndexBuild(creator.GetTransactionId());
 	auto &transaction_manager = DuckTransactionManager::Get(db);
-	// catch up outside the commit lock while the commits leave many rows behind, so that the final round is short
-	static constexpr idx_t MAX_UNLOCKED_ROUNDS = 4;
-	for (idx_t round = 0; build && round < MAX_UNLOCKED_ROUNDS && build->PendingRows() > STANDARD_VECTOR_SIZE;
-	     round++) {
+	// catch up outside the commit lock while each round leaves fewer rows behind, so that the final round is short
+	auto pending_rows = build ? build->PendingRows() : 0;
+	while (pending_rows > STANDARD_VECTOR_SIZE) {
 		CatchUpIndexBuild(*build, *index, transaction_manager.GetLastCommit());
+		auto rows_left = build->PendingRows();
+		if (rows_left >= pending_rows) {
+			// the commits append as fast as the catch-up
+			break;
+		}
+		pending_rows = rows_left;
 	}
 	// publish between commits: a commit reads the index list several times under the commit lock
 	auto commit_lock = db.GetStorageManager().GetCommitLock();
@@ -445,6 +444,11 @@ shared_ptr<IndexEntry> DataTable::AddIndex(DuckTransaction &creator, unique_ptr<
 	if (build) {
 		CatchUpIndexBuild(*build, *index, last_commit);
 		info->indexes.RemoveIndexBuild(*build);
+	}
+	if (!IsMainTable()) {
+		// an ALTER while the index was not yet in the index list did not see it
+		throw TransactionException(
+		    "Transaction conflict: cannot add an index to a table that has been altered or dropped");
 	}
 	return info->indexes.AddIndex(std::move(index), index_oid, check_mode, last_commit);
 }
@@ -1344,9 +1348,9 @@ void DataTable::RevertAppend(DuckTransaction &transaction, idx_t start_row, idx_
 //===--------------------------------------------------------------------===//
 void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
                                   IndexRemovalType removal_type, optional_idx active_checkpoint,
-                                  transaction_t commit_id) {
+                                  VisibilityBound bound) {
 	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, active_checkpoint,
-	                              commit_id);
+	                              bound);
 }
 
 //===--------------------------------------------------------------------===//

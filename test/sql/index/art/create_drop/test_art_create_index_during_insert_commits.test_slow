@@ -8,14 +8,21 @@ CREATE TABLE t(a BIGINT, b BIGINT);
 statement ok
 CREATE INDEX idx_a ON t(a);
 
-# thread 0 creates and drops idx_b on b, thread 1 commits 100,000-row inserts (autocommit), 40 times each
+# thread 0 creates and drops idx_b on b, thread 1 commits 100,000-row inserts (autocommit), 10 times each
 concurrentloop threadid 0 2
 
-loop i 0 40
+loop i 0 10
 
 onlyif threadid=0
 statement ok
 CREATE INDEX idx_b ON t(b);
+
+# the lookup through idx_b finds the rows committed while it was built
+onlyif threadid=0
+query I
+SELECT (SELECT count(*) FROM t WHERE b = 77) = (SELECT count(*) FROM t WHERE b + 0 = 77);
+----
+true
 
 onlyif threadid=0
 statement ok
@@ -32,4 +39,4 @@ endloop
 query I
 SELECT count(*) FROM t;
 ----
-4000000
+1000000

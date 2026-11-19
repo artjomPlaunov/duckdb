@@ -160,17 +160,13 @@ public:
 	                  optional_ptr<StorageCommitState> commit_state);
 	bool IsPersistent() const;
 
-	//! Removes the rows from the indexes added before the commit with this id.
+	//! Removes the rows from the indexes added before the bound.
 	void RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes, Vector &row_identifiers, idx_t count,
 	                       IndexRemovalType removal_type, optional_idx active_checkpoint = optional_idx(),
-	                       transaction_t commit_id = MAX_TRANSACTION_ID);
+	                       VisibilityBound bound = VisibilityBound::IncludingUncommitted());
 
-	//! Fetches the columns of the rows into table_chunk, with NULL for the other table columns
-	void FetchIndexColumns(TransactionData transaction, const unordered_set<column_t> &column_ids, Vector &row_ids,
-	                       idx_t count, DataChunk &fetch_chunk, DataChunk &table_chunk);
-	//! Appends the rows visible in one view but not in the other to the index, or deletes them from it
-	void ApplyIndexBuildRows(BoundIndex &index, const vector<RowRange> &ranges, TransactionData visible,
-	                         TransactionData not_visible, bool append);
+	//! Removes the rows of the ranges seen only before from the index, then appends the rows seen only after
+	void CatchUpIndex(BoundIndex &index, const vector<RowRange> &ranges, TransactionData before, TransactionData after);
 
 	//! Delete the given rows - optionally collects the ids of the rows that were deleted (excluding duplicates)
 	idx_t Delete(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids, idx_t count,
@@ -270,6 +266,9 @@ private:
 	                                                       idx_t count) const;
 
 	void SetRowGroups(shared_ptr<RowGroupSegmentTree> row_groups);
+	//! Fetches the columns of the rows into table_chunk, with NULL for the other table columns
+	void FetchIndexColumns(TransactionData transaction, const unordered_set<column_t> &column_ids, Vector &row_ids,
+	                       idx_t count, DataChunk &table_chunk);
 
 private:
 	//! BlockManager
