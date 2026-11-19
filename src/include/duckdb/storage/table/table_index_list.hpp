@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/atomic.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/common/enums/index_removal_type.hpp"
 #include "duckdb/common/optional_ptr.hpp"
@@ -22,6 +23,7 @@ namespace duckdb {
 class ConflictManager;
 class ConflictInfo;
 class IndexEntry;
+class IndexBuildLog;
 class TableIndexList;
 template <class TARGET>
 class IndexReadHandle;
@@ -43,7 +45,7 @@ public:
 	TableIndexIterationHelper<shared_ptr<IndexEntry>> IndexEntries() const;
 	//! Adds an index entry to the list of index entries, and returns it.
 	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode,
-	                                transaction_t maintained_after);
+	                                transaction_t added_after_commit);
 	//! Initializes the transaction-local delete and append indexes.
 	void InitializeLocalIndexes(TableIndexList &delete_indexes, TableIndexList &append_indexes) const;
 	//! Appends a chunk to all index entries.
@@ -57,7 +59,7 @@ public:
 	void RevertAppend(DataChunk &chunk, row_t row_start);
 	//! Appends deleted rows to all unique indexes.
 	void AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids);
-	//! Applies a removal or removal rollback to the index entries maintained by the commit with this id.
+	//! Applies a removal or removal rollback to the index entries added before the commit with this id.
 	void RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, transaction_t commit_id, IndexRemovalType removal_type,
 	                       optional_idx active_checkpoint = optional_idx());
 	//! Removes an index entry from the list of index entries and release any storage the index owns.
@@ -119,6 +121,16 @@ public:
 	}
 	//! Merge any changes added to deltas during a checkpoint back into the main indexes
 	void MergeCheckpointDeltas(optional_idx checkpoint_id) const;
+
+	//! Registers an index build that catches up on the commits after its scan point.
+	void AddIndexBuild(shared_ptr<IndexBuildLog> build);
+	void RemoveIndexBuild(const IndexBuildLog &build);
+	//! Returns the index builds in progress.
+	vector<shared_ptr<IndexBuildLog>> GetIndexBuilds() const;
+	//! Logs consecutive rows that a commit appended or deleted, for the index builds in progress.
+	void LogRowsForIndexBuilds(transaction_t commit_id, row_t row_start, idx_t count) const;
+	//! Logs a committed update of a column, for the index builds in progress.
+	void LogUpdateForIndexBuilds(transaction_t commit_id, column_t column_id) const;
 	//! Returns true, if all indexes
 	//! Find the foreign key matching the keys.
 	shared_ptr<IndexEntry> FindForeignKeyIndex(const vector<PhysicalIndex> &fk_keys, const ForeignKeyType fk_type);
@@ -127,7 +139,7 @@ public:
 	                      DataChunk &chunk, ConflictManager &conflict_manager);
 	//! Persist index buffers and install replacements before returning their metadata.
 	vector<shared_ptr<const IndexStorageInfo>> Checkpoint(TableIndexWriter &writer);
-	//! Returns the physical table columns of the indexes maintained by the commit with this id (by default all).
+	//! Returns the physical table columns of the indexes added before the commit with this id (by default all).
 	unordered_set<column_t> GetIndexedColumns(transaction_t commit_id = MAX_TRANSACTION_ID) const;
 	//! Returns the column sets of unique indexes matching the conflict target.
 	vector<unordered_set<column_t>> GetConflictTargetColumns(const ConflictInfo &conflict_info) const;
@@ -154,6 +166,12 @@ private:
 	vector<shared_ptr<IndexEntry>> index_entries DUCKDB_GUARDED_BY(index_entries_lock);
 	//! Contains the number of unbound indexes.
 	idx_t unbound_count DUCKDB_GUARDED_BY(index_entries_lock) = 0;
+	//! A lock for the index builds.
+	mutable mutex index_builds_lock;
+	//! The index builds in progress, which commits log their changes for.
+	vector<shared_ptr<IndexBuildLog>> index_builds;
+	//! The number of index builds in progress, read without the lock on every commit.
+	atomic<idx_t> index_build_count {0};
 };
 
 template <class T>

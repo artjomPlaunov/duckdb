@@ -159,7 +159,7 @@ public:
 	                  optional_ptr<StorageCommitState> commit_state);
 	bool IsPersistent() const;
 
-	//! Removes the rows from the indexes maintained by the commit with this id.
+	//! Removes the rows from the indexes added before the commit with this id.
 	void RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes, Vector &row_identifiers, idx_t count,
 	                       transaction_t commit_id, IndexRemovalType removal_type,
 	                       optional_idx active_checkpoint = optional_idx());

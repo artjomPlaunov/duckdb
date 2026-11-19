@@ -1078,7 +1078,7 @@ void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableInd
 	// Collect the indexed columns of the indexes we remove from.
 	auto indexed_column_id_set = indexes.GetIndexedColumns(commit_id);
 	if (indexed_column_id_set.empty()) {
-		// every index refers to a column, so this commit maintains no index
+		// every index refers to a column, so no index was added before this commit
 		return;
 	}
 

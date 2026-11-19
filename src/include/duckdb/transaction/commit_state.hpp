@@ -107,6 +107,8 @@ public:
 private:
 	void CommitEntryDrop(CatalogEntry &entry, data_ptr_t extra_data, CommitInfo &info);
 	void CommitDelete(DeleteInfo &info, transaction_t old_id);
+	//! Logs the deleted rows for the index builds in progress on the table
+	void LogDeleteForIndexBuilds(DeleteInfo &info);
 
 private:
 	DuckTransaction &transaction;

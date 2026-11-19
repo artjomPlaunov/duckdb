@@ -1,4 +1,5 @@
 #include "duckdb/storage/table/table_index_list.hpp"
+
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/shared_ptr_ipp.hpp"
 #include "duckdb/common/typedefs.hpp"
@@ -15,6 +16,7 @@
 #include "duckdb/storage/index_storage_info.hpp"
 #include "duckdb/storage/storage_info.hpp"
 #include "duckdb/storage/table/append_state.hpp"
+#include "duckdb/storage/table/index_build_log.hpp"
 #include "duckdb/execution/index/art/art.hpp"
 #include "duckdb/execution/index/unbound_index.hpp"
 #include "duckdb/main/config.hpp"
@@ -91,11 +93,12 @@ TableIndexList::~TableIndexList() {
 }
 
 shared_ptr<IndexEntry> TableIndexList::AddIndex(unique_ptr<Index> index, idx_t index_oid,
-                                                const ConstraintCheckMode check_mode, transaction_t maintained_after) {
+                                                const ConstraintCheckMode check_mode,
+                                                transaction_t added_after_commit) {
 	D_ASSERT(index);
 	D_ASSERT(index_oid != DConstants::INVALID_INDEX);
 	annotated_lock_guard lock(index_entries_lock);
-	auto index_entry = make_shared_ptr<IndexEntry>(std::move(index), index_oid, check_mode, maintained_after);
+	auto index_entry = make_shared_ptr<IndexEntry>(std::move(index), index_oid, check_mode, added_after_commit);
 	if (index_entry->GetBindState() != IndexBindState::BOUND) {
 		unbound_count++;
 	}
@@ -176,7 +179,7 @@ void TableIndexList::RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, const 
                                        const IndexRemovalType removal_type, const optional_idx active_checkpoint) {
 	annotated_lock_guard lock(index_entries_lock);
 	for (const auto &entry : index_entries) {
-		if (!entry->IsMaintainedBy(commit_id)) {
+		if (!entry->AddedBefore(commit_id)) {
 			// commits and reverts hold the commit lock, so only a cleanup can meet an index added after its commit
 			D_ASSERT(removal_type == IndexRemovalType::DELETED_ROWS_IN_USE);
 			continue;
@@ -503,7 +506,7 @@ unordered_set<column_t> TableIndexList::GetIndexedColumns(const transaction_t co
 	annotated_lock_guard lock(index_entries_lock);
 	unordered_set<column_t> column_ids;
 	for (const auto &entry : index_entries) {
-		if (!entry->IsMaintainedBy(commit_id)) {
+		if (!entry->AddedBefore(commit_id)) {
 			continue;
 		}
 		auto index_info = entry->GetStorageInfo();
@@ -593,6 +596,48 @@ void TableIndexList::MergeCheckpointDeltas(const optional_idx checkpoint_id) con
 	annotated_lock_guard lock(index_entries_lock);
 	for (const auto &entry : index_entries) {
 		entry->MergeCheckpointDeltas(checkpoint_id);
+	}
+}
+
+void TableIndexList::AddIndexBuild(shared_ptr<IndexBuildLog> build) {
+	lock_guard<mutex> lock(index_builds_lock);
+	index_builds.push_back(std::move(build));
+	index_build_count = index_builds.size();
+}
+
+void TableIndexList::RemoveIndexBuild(const IndexBuildLog &build) {
+	lock_guard<mutex> lock(index_builds_lock);
+	for (idx_t i = 0; i < index_builds.size(); i++) {
+		if (index_builds[i].get() == &build) {
+			index_builds.erase_at(i);
+			break;
+		}
+	}
+	index_build_count = index_builds.size();
+}
+
+vector<shared_ptr<IndexBuildLog>> TableIndexList::GetIndexBuilds() const {
+	lock_guard<mutex> lock(index_builds_lock);
+	return index_builds;
+}
+
+void TableIndexList::LogRowsForIndexBuilds(transaction_t commit_id, row_t row_start, idx_t count) const {
+	if (index_build_count == 0) {
+		return;
+	}
+	lock_guard<mutex> lock(index_builds_lock);
+	for (auto &build : index_builds) {
+		build->LogRows(commit_id, row_start, count);
+	}
+}
+
+void TableIndexList::LogUpdateForIndexBuilds(transaction_t commit_id, column_t column_id) const {
+	if (index_build_count == 0) {
+		return;
+	}
+	lock_guard<mutex> lock(index_builds_lock);
+	for (auto &build : index_builds) {
+		build->LogUpdate(commit_id, column_id);
 	}
 }
 

@@ -383,6 +383,7 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			                           table_name, table_modification);
 		}
 		CommitDelete(*info, transaction.GetTransactionId());
+		LogDeleteForIndexBuilds(*info);
 		break;
 	}
 	case UndoFlags::UPDATE_TUPLE: {
@@ -396,6 +397,8 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			                           table_name, table_modification);
 		}
 		info->version_number = commit_id;
+		info->table->GetStorage().GetDataTableInfo()->GetIndexes().LogUpdateForIndexBuilds(commit_id,
+		                                                                                    info->column_index);
 		break;
 	}
 	case UndoFlags::UPDATE_ROWS: {
@@ -409,6 +412,18 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 	}
 	default:
 		throw InternalException("UndoBuffer - don't know how to commit this type!");
+	}
+}
+
+void CommitState::LogDeleteForIndexBuilds(DeleteInfo &info) {
+	auto &indexes = info.table->GetStorage().GetDataTableInfo()->GetIndexes();
+	if (info.is_consecutive) {
+		indexes.LogRowsForIndexBuilds(commit_id, UnsafeNumericCast<row_t>(info.base_row), info.count);
+		return;
+	}
+	auto rows = info.GetRows();
+	for (idx_t i = 0; i < info.count; i++) {
+		indexes.LogRowsForIndexBuilds(commit_id, UnsafeNumericCast<row_t>(info.base_row + rows[i]), 1);
 	}
 }
 

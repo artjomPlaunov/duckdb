@@ -29,6 +29,8 @@ class DistinctStatistics;
 class DuckTransaction;
 class Expression;
 class Index;
+class IndexBuildLog;
+class BoundIndex;
 class OptimisticDataWriter;
 class RowGroup;
 class RowGroupCollection;
@@ -209,7 +211,7 @@ public:
 	//! Merge a row group collection directly into this table - appending it to the end of the table without copying
 	void MergeStorage(RowGroupCollection &data, optional_ptr<StorageCommitState> commit_state);
 
-	//! Remove the row identifiers from the indexes of the table that the commit with this id maintains
+	//! Remove the row identifiers from the indexes of the table added before the commit with this id
 	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count, transaction_t commit_id,
 	                       IndexRemovalType removal_type, optional_idx checkpoint_id = optional_idx());
 
@@ -264,7 +266,7 @@ public:
 	                           vector<ColumnSegmentInfo> &result);
 
 	//! Scans the next chunk for the CREATE INDEX operator
-	bool CreateIndexScan(TableScanState &state, DataChunk &result);
+	bool CreateIndexScan(TableScanState &state, DataChunk &result, const IndexBuildLog &build);
 	//! Initialize constraint verification state
 	unique_ptr<ConstraintState> InitializeConstraintState(TableCatalogEntry &table,
 	                                                      const vector<unique_ptr<BoundConstraint>> &bound_constraints);
@@ -302,8 +304,15 @@ public:
 	void AddIndex(const ColumnList &columns, const vector<LogicalIndex> &column_indexes, const IndexConstraintType type,
 	              IndexStorageInfo index_info, idx_t index_oid, ConstraintCheckMode check_mode);
 	//! Adds an index to this table's index list and returns its entry; waits for any commit in progress.
+	//! An index built by a scan of this table first catches up on the commits after the scan's build point.
 	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid,
 	                                ConstraintCheckMode check_mode = ConstraintCheckMode::DEFAULT);
+	//! Adds an index that this transaction built, see AddIndex above.
+	shared_ptr<IndexEntry> AddIndex(DuckTransaction &creator, unique_ptr<Index> index, idx_t index_oid,
+	                                ConstraintCheckMode check_mode);
+	//! Starts an index build over these columns: later commits log the rows they change for it
+	shared_ptr<IndexBuildLog> RegisterIndexBuild(DuckTransaction &creator, unordered_set<column_t> column_ids);
+	void UnregisterIndexBuild(const IndexBuildLog &build);
 
 	//! Returns a list of the partition stats
 	vector<PartitionStatistics> GetPartitionStats(ClientContext &context);
@@ -328,6 +337,13 @@ private:
 
 	//! Rebuild all indexes after vacuuming changed rowid's (used with vacuum_rebuild_indexes setting).
 	void RebuildIndexes();
+	shared_ptr<IndexEntry> AddIndex(shared_ptr<IndexBuildLog> build, unique_ptr<Index> index, idx_t index_oid,
+	                                ConstraintCheckMode check_mode);
+	//! Adds and removes the rows that the commits up to and including this one changed since the build caught up
+	void CatchUpIndexBuild(IndexBuildLog &build, BoundIndex &index, transaction_t commit_id);
+	//! Appends the rows live in the live view but not the other view to the index, or deletes them from it
+	void ApplyIndexBuildRows(BoundIndex &index, vector<row_t> &rows, TransactionData live, TransactionData other,
+	                         bool append);
 
 	void VerifyForeignKeyConstraint(optional_ptr<LocalTableStorage> storage,
 	                                const BoundForeignKeyConstraint &bound_foreign_key, ClientContext &context,

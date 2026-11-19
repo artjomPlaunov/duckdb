@@ -1772,6 +1772,18 @@ bool UpdateSegment::HasUncommittedUpdates(idx_t vector_index) {
 	return false;
 }
 
+bool UpdateSegment::HasInvisibleUpdates(const SnapshotView &view, idx_t vector_index) {
+	auto read_lock = lock.GetSharedLock();
+	auto entry = GetUpdateNode(*read_lock, vector_index);
+	if (!entry.IsSet()) {
+		return false;
+	}
+	auto pin = entry.Pin();
+	vector<UndoBufferReference> invisible_updates;
+	UpdateInfo::GetInvisibleUpdates(UpdateInfo::Get(pin), view, invisible_updates);
+	return !invisible_updates.empty();
+}
+
 bool UpdateSegment::HasUpdates(idx_t start_row_index, idx_t end_row_index) {
 	auto read_lock = lock.GetSharedLock();
 	if (!root) {

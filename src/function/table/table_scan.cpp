@@ -1,4 +1,5 @@
 #include "duckdb/function/table/table_scan.hpp"
+#include "duckdb/storage/table/index_build_log.hpp"
 #include "duckdb/function/table/native_scan_job.hpp"
 #include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/block_allocator.hpp"
@@ -360,9 +361,17 @@ public:
 		}
 	}
 
+	~DuckTableScanState() override {
+		if (index_build) {
+			storage.UnregisterIndexBuild(*index_build);
+		}
+	}
+
 public:
 	ParallelTableScanState state;
 	unique_ptr<ScanReadAhead> read_ahead;
+	//! The index build that a CREATE INDEX scan reads for
+	shared_ptr<IndexBuildLog> index_build;
 
 private:
 	const TableScanBindData &bind_data;
@@ -682,7 +691,7 @@ public:
 
 		do {
 			if (bind_data.is_create_index) {
-				storage.CreateIndexScan(l_state.scan_state, output);
+				storage.CreateIndexScan(l_state.scan_state, output, *index_build);
 				UpdateScanProgress(l_state, l_state.scan_state);
 			} else if (scheduling == TableScanScheduling::ORDERED) {
 				if (!ScanWithReadAhead(context, data_p, l_state, output) &&
@@ -807,6 +816,17 @@ unique_ptr<GlobalTableFunctionState> DuckTableScanInitGlobal(ClientContext &cont
 			g_state->state.scan_state.row_number_base = 0;
 			break;
 		}
+	}
+	if (bind_data.is_create_index) {
+		// before the scan fixes its last row: the scan reads every row that the build point covers
+		unordered_set<column_t> column_ids;
+		for (auto &column_index : input.column_indexes) {
+			if (!column_index.IsVirtualColumn()) {
+				column_ids.insert(bind_data.table.GetStorageIndex(column_index).GetPrimaryIndex());
+			}
+		}
+		auto &transaction = DuckTransaction::Get(context, storage.GetAttached());
+		g_state->index_build = storage.RegisterIndexBuild(transaction, std::move(column_ids));
 	}
 	storage.InitializeParallelScan(context, g_state->state, input.column_indexes);
 	g_state->InitializeScanInfo(input);
@@ -1143,8 +1163,13 @@ unique_ptr<GlobalTableFunctionState> TableScanInitGlobal(ClientContext &context,
 		vacuum_lock = DuckTransactionManager::Get(attached).SharedVacuumLock();
 	}
 
+	auto &transaction = DuckTransaction::Get(context, storage.GetAttached());
 	for (auto entry : indexes.IndexEntries()) {
 		if (entry->GetBindState() != IndexBindState::BOUND || entry->GetIndexType() != ART::TYPE_NAME) {
+			continue;
+		}
+		if (!entry->ScannableBy(transaction.view)) {
+			// the index lacks rows that this older snapshot still sees
 			continue;
 		}
 		{
