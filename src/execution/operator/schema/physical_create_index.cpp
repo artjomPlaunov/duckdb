@@ -190,7 +190,7 @@ SinkFinalizeType PhysicalCreateIndex::Finalize(Pipeline &pipeline, Event &event,
 
 	// Add the index to the storage.
 	auto &transaction = DuckTransaction::Get(context, storage.db);
-	auto index_entry = storage.AddIndex(transaction, std::move(bound_index), index_oid, check_mode);
+	auto index_entry = storage.PublishIndex(transaction, std::move(bound_index), index_oid, check_mode);
 	if (local_table_storage) {
 		// Existing transaction-local rows are verified when committing, so we only add a delete index.
 		index_entry->InitializeLocalDeleteIndex(local_table_storage->delete_indexes);

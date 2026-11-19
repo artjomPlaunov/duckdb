@@ -690,11 +690,8 @@ public:
 #endif
 
 		do {
-			if (bind_data.is_create_index && index_build) {
-				storage.CreateIndexScan(l_state.scan_state, output, *index_build);
-				UpdateScanProgress(l_state, l_state.scan_state);
-			} else if (bind_data.is_create_index) {
-				storage.CreateIndexScan(l_state.scan_state, output);
+			if (bind_data.is_create_index) {
+				storage.CreateIndexScan(l_state.scan_state, output, index_build.get());
 				UpdateScanProgress(l_state, l_state.scan_state);
 			} else if (scheduling == TableScanScheduling::ORDERED) {
 				if (!ScanWithReadAhead(context, data_p, l_state, output) &&
@@ -820,8 +817,8 @@ unique_ptr<GlobalTableFunctionState> DuckTableScanInitGlobal(ClientContext &cont
 			break;
 		}
 	}
-	if (bind_data.is_create_index && bind_data.catch_up_index_build) {
-		// before the scan fixes its last row: the scan reads every row that the build point covers
+	if (bind_data.catch_up_index_build) {
+		// register before the scan fixes its row range, so that it reads every row up to the build point
 		unordered_set<column_t> column_ids;
 		for (auto &column_index : input.column_indexes) {
 			if (!column_index.IsVirtualColumn()) {
@@ -1171,7 +1168,7 @@ unique_ptr<GlobalTableFunctionState> TableScanInitGlobal(ClientContext &context,
 		if (entry->GetBindState() != IndexBindState::BOUND || entry->GetIndexType() != ART::TYPE_NAME) {
 			continue;
 		}
-		if (!entry->ScannableBy(transaction.view)) {
+		if (!entry->ScannableBy(transaction.view.visibility_bound)) {
 			// the index lacks rows that this older snapshot still sees
 			continue;
 		}

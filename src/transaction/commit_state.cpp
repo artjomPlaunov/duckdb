@@ -1,4 +1,5 @@
 #include "duckdb/transaction/commit_state.hpp"
+#include "duckdb/storage/table/index_build_log.hpp"
 #include "duckdb/transaction/transaction_data.hpp"
 
 #include "duckdb/catalog/catalog_entry/duck_index_entry.hpp"
@@ -124,7 +125,7 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 	// If there is any issue with removal, a FatalException must be thrown since there may be a corruption of
 	// data, hence the transaction cannot be guaranteed.
 	try {
-		table.RemoveFromIndexes(context, row_identifiers, count, transaction.commit_id, removal_type, checkpoint_id);
+		table.RemoveFromIndexes(context, row_identifiers, count, removal_type, checkpoint_id, transaction.commit_id);
 	} catch (std::exception &ex) {
 		throw FatalException(ErrorData(ex).Message());
 	} catch (...) {
@@ -369,7 +370,11 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			                           table_name, table_modification);
 		}
 		// mark the tuples as committed
-		info->table->GetStorage().CommitAppend(commit_id, info->start_row, info->count);
+		auto &storage = info->table->GetStorage();
+		storage.CommitAppend(commit_id, info->start_row, info->count);
+		auto row_start = UnsafeNumericCast<row_t>(info->start_row);
+		storage.GetDataTableInfo()->GetIndexes().ForEachIndexBuild(
+		    [&](IndexBuildLog &build) { build.LogRows(commit_id, row_start, info->count); });
 		break;
 	}
 	case UndoFlags::DELETE_TUPLE: {
@@ -397,8 +402,8 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			                           table_name, table_modification);
 		}
 		info->version_number = commit_id;
-		info->table->GetStorage().GetDataTableInfo()->GetIndexes().LogUpdateForIndexBuilds(commit_id,
-		                                                                                    info->column_index);
+		info->table->GetStorage().GetDataTableInfo()->GetIndexes().ForEachIndexBuild(
+		    [&](IndexBuildLog &build) { build.LogUpdate(commit_id, info->column_index); });
 		break;
 	}
 	case UndoFlags::UPDATE_ROWS: {
@@ -417,14 +422,14 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 
 void CommitState::LogDeleteForIndexBuilds(DeleteInfo &info) {
 	auto &indexes = info.table->GetStorage().GetDataTableInfo()->GetIndexes();
-	if (info.is_consecutive) {
-		indexes.LogRowsForIndexBuilds(commit_id, UnsafeNumericCast<row_t>(info.base_row), info.count);
-		return;
-	}
-	auto rows = info.GetRows();
-	for (idx_t i = 0; i < info.count; i++) {
-		indexes.LogRowsForIndexBuilds(commit_id, UnsafeNumericCast<row_t>(info.base_row + rows[i]), 1);
-	}
+	auto base_row = UnsafeNumericCast<row_t>(info.base_row);
+	indexes.ForEachIndexBuild([&](IndexBuildLog &build) {
+		if (info.is_consecutive) {
+			build.LogRows(commit_id, base_row, info.count);
+		} else {
+			build.LogRows(commit_id, base_row, info.GetRows(), info.count);
+		}
+	});
 }
 
 void CommitState::CommitDelete(DeleteInfo &info, transaction_t old_id) {

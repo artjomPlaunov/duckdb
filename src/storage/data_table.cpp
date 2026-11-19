@@ -371,12 +371,11 @@ void DataTable::Scan(DuckTransaction &transaction, DataChunk &result, TableScanS
 	local_storage.Scan(state.local_state, state.GetColumnIds(), result);
 }
 
-bool DataTable::CreateIndexScan(TableScanState &state, DataChunk &result) {
+bool DataTable::CreateIndexScan(TableScanState &state, DataChunk &result, optional_ptr<const IndexBuildLog> build) {
+	if (build) {
+		return state.table_state.Scan(build->GetScanOptions(), result);
+	}
 	return state.table_state.Scan(result, TableScanType::TABLE_SCAN_OMIT_PERMANENTLY_DELETED);
-}
-
-bool DataTable::CreateIndexScan(TableScanState &state, DataChunk &result, const IndexBuildLog &build) {
-	return state.table_state.Scan(build.GetScanOptions(), result);
 }
 
 //===--------------------------------------------------------------------===//
@@ -411,129 +410,37 @@ void DataTable::UnregisterIndexBuild(const IndexBuildLog &build) {
 	info->indexes.RemoveIndexBuild(build);
 }
 
-void DataTable::ApplyIndexBuildRows(BoundIndex &index, vector<row_t> &rows, TransactionData live, TransactionData other,
-                                    bool append) {
-	auto types = GetTypes();
-	vector<column_t> indexed_columns(index.GetColumnIdSet().begin(), index.GetColumnIdSet().end());
-	std::sort(indexed_columns.begin(), indexed_columns.end());
-	vector<StorageIndex> column_ids;
-	vector<LogicalType> fetch_types;
-	for (auto column_id : indexed_columns) {
-		column_ids.emplace_back(column_id);
-		fetch_types.push_back(types[column_id]);
-	}
-	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
-	fetch_types.push_back(LogicalType::ROW_TYPE);
-	vector<StorageIndex> row_id_column {StorageIndex(COLUMN_IDENTIFIER_ROW_ID)};
-
-	auto &allocator = Allocator::Get(db);
-	DataChunk live_chunk;
-	live_chunk.Initialize(allocator, fetch_types);
-	DataChunk other_chunk;
-	other_chunk.Initialize(allocator, {LogicalType::ROW_TYPE});
-	SelectionVector sel(STANDARD_VECTOR_SIZE);
-
-	for (idx_t offset = 0; offset < rows.size(); offset += STANDARD_VECTOR_SIZE) {
-		auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, rows.size() - offset);
-		Vector row_identifiers(LogicalType::ROW_TYPE, data_ptr_cast(rows.data() + offset), count);
-		live_chunk.Reset();
-		ColumnFetchState live_state;
-		row_groups->Fetch(live, live_chunk, column_ids, row_identifiers, count, live_state);
-		other_chunk.Reset();
-		ColumnFetchState other_state;
-		row_groups->Fetch(other, other_chunk, row_id_column, row_identifiers, count, other_state);
-
-		// both fetches keep the ascending order of the rows
-		auto live_rows = FlatVector::GetData<row_t>(live_chunk.data.back());
-		auto other_rows = FlatVector::GetData<row_t>(other_chunk.data[0]);
-		idx_t other_idx = 0;
-		idx_t sel_count = 0;
-		for (idx_t i = 0; i < live_chunk.size(); i++) {
-			while (other_idx < other_chunk.size() && other_rows[other_idx] < live_rows[i]) {
-				other_idx++;
-			}
-			if (other_idx < other_chunk.size() && other_rows[other_idx] == live_rows[i]) {
-				continue;
-			}
-			sel.set_index(sel_count++, i);
-		}
-		if (sel_count == 0) {
-			continue;
-		}
-		live_chunk.Slice(sel, sel_count);
-
-		// the index expressions refer to all table columns: reference the indexed ones, NULL for the others
-		DataChunk table_chunk;
-		table_chunk.InitializeEmpty(types);
-		for (idx_t col_idx = 0; col_idx < types.size(); col_idx++) {
-			table_chunk.data[col_idx].Reference(Value(types[col_idx]), count_t(sel_count));
-		}
-		for (idx_t i = 0; i < indexed_columns.size(); i++) {
-			table_chunk.data[indexed_columns[i]].Reference(live_chunk.data[i]);
-		}
-		auto &row_ids = live_chunk.data.back();
-		if (!append) {
-			index.Delete(table_chunk, row_ids);
-			continue;
-		}
-		if (index.IsPrimary()) {
-			DataChunk key_chunk;
-			key_chunk.Initialize(allocator, index.logical_types);
-			index.ExecuteExpressions(table_chunk, key_chunk);
-			for (auto &key : key_chunk.data) {
-				if (VectorOperations::HasNull(key)) {
-					throw ConstraintException("NOT NULL constraint failed: %s", index.GetIndexName());
-				}
-			}
-		}
-		auto error = index.Append(table_chunk, row_ids);
-		if (error.HasError()) {
-			error.Throw();
-		}
-	}
-}
-
 void DataTable::CatchUpIndexBuild(IndexBuildLog &build, BoundIndex &index, transaction_t commit_id) {
-	auto rows = build.TakeChanges(commit_id);
-	if (!rows.empty()) {
+	auto ranges = build.TakeChanges(commit_id);
+	if (!ranges.empty()) {
 		TransactionData before(MAX_TRANSACTION_ID, VisibilityBound::Through(build.GetCaughtUpCommit()));
 		TransactionData after(MAX_TRANSACTION_ID, VisibilityBound::Through(commit_id));
 		// remove the deleted rows first: a key that moved to another row is never in a unique index twice
-		ApplyIndexBuildRows(index, rows, before, after, false);
-		ApplyIndexBuildRows(index, rows, after, before, true);
+		row_groups->ApplyIndexBuildRows(index, ranges, before, after, false);
+		row_groups->ApplyIndexBuildRows(index, ranges, after, before, true);
 	}
 	build.SetCaughtUp(commit_id);
 }
 
-shared_ptr<IndexEntry> DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode) {
-	return info->indexes.AddIndex(std::move(index), index_oid, check_mode, 0);
+void DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid) {
+	info->indexes.AddIndex(std::move(index), index_oid, ConstraintCheckMode::DEFAULT);
 }
 
-shared_ptr<IndexEntry> DataTable::AddIndex(DuckTransaction &creator, unique_ptr<Index> index, idx_t index_oid,
-                                           ConstraintCheckMode check_mode) {
-	shared_ptr<IndexBuildLog> build;
-	for (auto &entry : info->indexes.GetIndexBuilds()) {
-		if (entry->creator_id == creator.GetTransactionId()) {
-			build = entry;
-		}
-	}
+shared_ptr<IndexEntry> DataTable::PublishIndex(DuckTransaction &creator, unique_ptr<BoundIndex> index, idx_t index_oid,
+                                               ConstraintCheckMode check_mode) {
+	auto build = info->indexes.FindIndexBuild(creator.GetTransactionId());
 	auto &transaction_manager = DuckTransactionManager::Get(db);
-	optional_ptr<BoundIndex> bound_index;
-	if (build && index->IsBound()) {
-		bound_index = index->Cast<BoundIndex>();
-		// catch up outside the commit lock while the commits leave many rows behind, so that the final round is short
-		static constexpr idx_t MAX_UNLOCKED_ROUNDS = 4;
-		for (idx_t round = 0; round < MAX_UNLOCKED_ROUNDS && build->PendingRows() > STANDARD_VECTOR_SIZE; round++) {
-			CatchUpIndexBuild(*build, *bound_index, transaction_manager.GetLastCommit());
-		}
+	// catch up outside the commit lock while the commits leave many rows behind, so that the final round is short
+	static constexpr idx_t MAX_UNLOCKED_ROUNDS = 4;
+	for (idx_t round = 0; build && round < MAX_UNLOCKED_ROUNDS && build->PendingRows() > STANDARD_VECTOR_SIZE;
+	     round++) {
+		CatchUpIndexBuild(*build, *index, transaction_manager.GetLastCommit());
 	}
 	// publish between commits: a commit reads the index list several times under the commit lock
 	auto commit_lock = db.GetStorageManager().GetCommitLock();
 	auto last_commit = transaction_manager.GetLastCommit();
-	if (bound_index) {
-		CatchUpIndexBuild(*build, *bound_index, last_commit);
-	}
 	if (build) {
+		CatchUpIndexBuild(*build, *index, last_commit);
 		info->indexes.RemoveIndexBuild(*build);
 	}
 	return info->indexes.AddIndex(std::move(index), index_oid, check_mode, last_commit);
@@ -1381,7 +1288,6 @@ void DataTable::WriteToLog(DuckTransaction &transaction, WriteAheadLog &log, idx
 void DataTable::CommitAppend(transaction_t commit_id, idx_t row_start, idx_t count) {
 	lock_guard<mutex> lock(append_lock);
 	row_groups->CommitAppend(commit_id, row_start, count);
-	info->indexes.LogRowsForIndexBuilds(commit_id, UnsafeNumericCast<row_t>(row_start), count);
 }
 
 void DataTable::RevertAppendInternal(idx_t start_row) {
@@ -1434,10 +1340,10 @@ void DataTable::RevertAppend(DuckTransaction &transaction, idx_t start_row, idx_
 // Indexes
 //===--------------------------------------------------------------------===//
 void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-                                  transaction_t commit_id, IndexRemovalType removal_type,
-                                  optional_idx active_checkpoint) {
-	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, commit_id, removal_type,
-	                              active_checkpoint);
+                                  IndexRemovalType removal_type, optional_idx active_checkpoint,
+                                  transaction_t commit_id) {
+	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, active_checkpoint,
+	                              commit_id);
 }
 
 //===--------------------------------------------------------------------===//
@@ -1928,7 +1834,7 @@ void DataTable::AddIndex(const ColumnList &columns, const vector<LogicalIndex> &
 	auto &io_manager = TableIOManager::Get(*this);
 	auto art = make_uniq<ART>(index_info.name, type, physical_ids, io_manager, std::move(expressions), db, nullptr,
 	                          index_info);
-	info->indexes.AddIndex(std::move(art), index_oid, check_mode, 0);
+	info->indexes.AddIndex(std::move(art), index_oid, check_mode);
 }
 
 } // namespace duckdb

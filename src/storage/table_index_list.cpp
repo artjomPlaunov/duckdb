@@ -1,5 +1,4 @@
 #include "duckdb/storage/table/table_index_list.hpp"
-
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/shared_ptr_ipp.hpp"
 #include "duckdb/common/typedefs.hpp"
@@ -175,8 +174,8 @@ void TableIndexList::AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids) {
 	}
 }
 
-void TableIndexList::RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, const transaction_t commit_id,
-                                       const IndexRemovalType removal_type, const optional_idx active_checkpoint) {
+void TableIndexList::RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, const IndexRemovalType removal_type,
+                                       const optional_idx active_checkpoint, const transaction_t commit_id) {
 	annotated_lock_guard lock(index_entries_lock);
 	for (const auto &entry : index_entries) {
 		if (!entry->AddedBefore(commit_id)) {
@@ -616,29 +615,14 @@ void TableIndexList::RemoveIndexBuild(const IndexBuildLog &build) {
 	index_build_count = index_builds.size();
 }
 
-vector<shared_ptr<IndexBuildLog>> TableIndexList::GetIndexBuilds() const {
-	lock_guard<mutex> lock(index_builds_lock);
-	return index_builds;
-}
-
-void TableIndexList::LogRowsForIndexBuilds(transaction_t commit_id, row_t row_start, idx_t count) const {
-	if (index_build_count == 0) {
-		return;
-	}
+shared_ptr<IndexBuildLog> TableIndexList::FindIndexBuild(transaction_t creator_id) const {
 	lock_guard<mutex> lock(index_builds_lock);
 	for (auto &build : index_builds) {
-		build->LogRows(commit_id, row_start, count);
+		if (build->creator_id == creator_id) {
+			return build;
+		}
 	}
-}
-
-void TableIndexList::LogUpdateForIndexBuilds(transaction_t commit_id, column_t column_id) const {
-	if (index_build_count == 0) {
-		return;
-	}
-	lock_guard<mutex> lock(index_builds_lock);
-	for (auto &build : index_builds) {
-		build->LogUpdate(commit_id, column_id);
-	}
+	return nullptr;
 }
 
 void TableIndexList::InitializeIndexChunk(DataChunk &index_chunk, const vector<LogicalType> &table_types,

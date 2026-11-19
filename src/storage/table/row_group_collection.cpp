@@ -7,6 +7,7 @@
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/execution/index/art/art.hpp"
+#include "duckdb/storage/table/index_build_log.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/profiler/profiling_utils.hpp"
 #include "duckdb/main/query_profiler.hpp"
@@ -1072,42 +1073,29 @@ void RowGroupCollection::Update(TransactionData transaction, DuckTableEntry &tab
 	}
 }
 
-void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes,
-                                           Vector &row_identifiers, idx_t count, transaction_t commit_id,
-                                           IndexRemovalType removal_type, optional_idx active_checkpoint) {
-	// Collect the indexed columns of the indexes we remove from.
-	auto indexed_column_id_set = indexes.GetIndexedColumns(commit_id);
-	if (indexed_column_id_set.empty()) {
-		// every index refers to a column, so no index was added before this commit
-		return;
-	}
-
+void RowGroupCollection::FetchIndexColumns(TransactionData transaction, const unordered_set<column_t> &column_ids,
+                                           Vector &row_ids, idx_t count, DataChunk &fetch_chunk,
+                                           DataChunk &table_chunk) {
 	// Sorted so that the fetched columns align with the ascending physical order used when
-	// referencing them into result_chunk below.
-	vector<StorageIndex> column_ids {indexed_column_id_set.begin(), indexed_column_id_set.end()};
-	sort(column_ids.begin(), column_ids.end());
+	// referencing them into table_chunk below.
+	vector<StorageIndex> fetch_ids {column_ids.begin(), column_ids.end()};
+	sort(fetch_ids.begin(), fetch_ids.end());
 
-	vector<LogicalType> column_types;
-	column_types.reserve(column_ids.size());
-	for (auto &col : column_ids) {
-		column_types.push_back(types[col.GetPrimaryIndex()]);
+	vector<LogicalType> fetch_types;
+	fetch_types.reserve(fetch_ids.size());
+	for (auto &col : fetch_ids) {
+		fetch_types.push_back(types[col.GetPrimaryIndex()]);
 	}
-
-	DataChunk fetch_chunk;
-	fetch_chunk.Initialize(GetAllocator(), column_types);
+	fetch_chunk.Initialize(GetAllocator(), fetch_types);
 
 	ColumnFetchState state;
 	state.fetch_type = FetchType::FORCE_FETCH;
-	TransactionData commit_transaction(MAX_TRANSACTION_ID, VisibilityBound::Before(MAX_COMMIT_ID));
-	Fetch(commit_transaction, fetch_chunk, column_ids, row_identifiers, count, state);
+	Fetch(transaction, fetch_chunk, fetch_ids, row_ids, count, state);
 
-	// Used for index value removal.
-	// Contains all columns but only initializes indexed ones.
-	DataChunk result_chunk;
+	// Contains all columns but only initializes the fetched ones.
 	auto fetched_columns = vector<bool>(types.size(), false);
-	result_chunk.Initialize(GetAllocator(), types, fetched_columns);
-	// Now set all to-be-fetched columns.
-	for (auto &col : indexed_column_id_set) {
+	table_chunk.Initialize(GetAllocator(), types, fetched_columns);
+	for (auto &col : column_ids) {
 		fetched_columns[col] = true;
 	}
 
@@ -1115,13 +1103,104 @@ void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableInd
 	idx_t fetch_idx = 0;
 	for (idx_t j = 0; j < types.size(); j++) {
 		if (fetched_columns[j]) {
-			result_chunk.data[j].Reference(fetch_chunk.data[fetch_idx++]);
+			table_chunk.data[j].Reference(fetch_chunk.data[fetch_idx++]);
 			continue;
 		}
-		result_chunk.data[j].Reference(Value(types[j]), count_t(fetch_chunk.size()));
+		table_chunk.data[j].Reference(Value(types[j]), count_t(fetch_chunk.size()));
+	}
+}
+
+void RowGroupCollection::ApplyIndexBuildRows(BoundIndex &index, const vector<RowRange> &ranges, TransactionData visible,
+                                             TransactionData not_visible, bool append) {
+	vector<StorageIndex> row_id_column {StorageIndex(COLUMN_IDENTIFIER_ROW_ID)};
+	DataChunk visible_chunk;
+	visible_chunk.Initialize(GetAllocator(), {LogicalType::ROW_TYPE});
+	DataChunk not_visible_chunk;
+	not_visible_chunk.Initialize(GetAllocator(), {LogicalType::ROW_TYPE});
+
+	row_t row_buffer[STANDARD_VECTOR_SIZE];
+	row_t selected_rows[STANDARD_VECTOR_SIZE];
+	idx_t range_idx = 0;
+	idx_t range_offset = 0;
+	while (range_idx < ranges.size()) {
+		// the next rows, in ascending order, up to one vector
+		idx_t count = 0;
+		while (count < STANDARD_VECTOR_SIZE && range_idx < ranges.size()) {
+			auto &range = ranges[range_idx];
+			auto take = MinValue<idx_t>(STANDARD_VECTOR_SIZE - count, range.count - range_offset);
+			for (idx_t i = 0; i < take; i++) {
+				row_buffer[count++] = range.row_start + UnsafeNumericCast<row_t>(range_offset + i);
+			}
+			range_offset += take;
+			if (range_offset == range.count) {
+				range_idx++;
+				range_offset = 0;
+			}
+		}
+		Vector row_identifiers(LogicalType::ROW_TYPE, data_ptr_cast(row_buffer), count);
+		visible_chunk.Reset();
+		ColumnFetchState visible_state;
+		Fetch(visible, visible_chunk, row_id_column, row_identifiers, count, visible_state);
+		not_visible_chunk.Reset();
+		ColumnFetchState not_visible_state;
+		Fetch(not_visible, not_visible_chunk, row_id_column, row_identifiers, count, not_visible_state);
+
+		// both fetches keep the ascending order of the rows
+		auto visible_rows = FlatVector::GetData<row_t>(visible_chunk.data[0]);
+		auto not_visible_rows = FlatVector::GetData<row_t>(not_visible_chunk.data[0]);
+		idx_t not_visible_idx = 0;
+		idx_t selected_count = 0;
+		for (idx_t i = 0; i < visible_chunk.size(); i++) {
+			while (not_visible_idx < not_visible_chunk.size() && not_visible_rows[not_visible_idx] < visible_rows[i]) {
+				not_visible_idx++;
+			}
+			if (not_visible_idx < not_visible_chunk.size() && not_visible_rows[not_visible_idx] == visible_rows[i]) {
+				continue;
+			}
+			selected_rows[selected_count++] = visible_rows[i];
+		}
+		if (selected_count == 0) {
+			continue;
+		}
+
+		Vector row_ids(LogicalType::ROW_TYPE, data_ptr_cast(selected_rows), selected_count);
+		DataChunk fetch_chunk;
+		DataChunk table_chunk;
+		FetchIndexColumns(visible, index.GetColumnIdSet(), row_ids, selected_count, fetch_chunk, table_chunk);
+		if (!append) {
+			index.Delete(table_chunk, row_ids);
+			continue;
+		}
+		if (index.IsPrimary()) {
+			// the key columns of a primary key are the fetched columns
+			for (auto &column : fetch_chunk.data) {
+				if (VectorOperations::HasNull(column)) {
+					throw ConstraintException("NOT NULL constraint failed: %s", index.GetIndexName());
+				}
+			}
+		}
+		auto error = index.Append(table_chunk, row_ids);
+		if (error.HasError()) {
+			error.Throw();
+		}
+	}
+}
+
+void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes,
+                                           Vector &row_identifiers, idx_t count, IndexRemovalType removal_type,
+                                           optional_idx active_checkpoint, transaction_t commit_id) {
+	// Collect the indexed columns of the indexes we remove from.
+	auto indexed_column_id_set = indexes.GetIndexedColumns(commit_id);
+	if (indexed_column_id_set.empty()) {
+		// no index was added before this commit
+		return;
 	}
 
-	indexes.RemoveFromIndexes(result_chunk, row_identifiers, commit_id, removal_type, active_checkpoint);
+	DataChunk fetch_chunk;
+	DataChunk result_chunk;
+	TransactionData commit_transaction(MAX_TRANSACTION_ID, VisibilityBound::Before(MAX_COMMIT_ID));
+	FetchIndexColumns(commit_transaction, indexed_column_id_set, row_identifiers, count, fetch_chunk, result_chunk);
+	indexes.RemoveFromIndexes(result_chunk, row_identifiers, removal_type, active_checkpoint, commit_id);
 }
 
 void RowGroupCollection::UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry, Vector &row_ids,

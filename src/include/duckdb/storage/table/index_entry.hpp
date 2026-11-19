@@ -16,7 +16,6 @@
 #include "duckdb/storage/index.hpp"
 #include "duckdb/storage/storage_info.hpp"
 #include "duckdb/storage/storage_lock.hpp"
-#include "duckdb/transaction/transaction_data.hpp"
 
 #include <functional>
 #include <memory>
@@ -209,8 +208,8 @@ public:
 		return commit_id > added_after_commit;
 	}
 	//! Whether a snapshot can scan the index: it sees every commit the index was built from.
-	bool ScannableBy(const SnapshotView &view) const {
-		return added_after_commit < view.visibility_bound;
+	bool ScannableBy(VisibilityBound visibility_bound) const {
+		return added_after_commit < visibility_bound;
 	}
 
 private:

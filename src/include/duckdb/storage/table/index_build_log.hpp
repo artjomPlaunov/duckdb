@@ -15,8 +15,13 @@
 
 namespace duckdb {
 
-//! The rows that commits after an index build's scan point append or delete, so that the build can catch up on them
-//! before the index is published. A committed update of an indexed column fails the build instead.
+//! Consecutive rows of a table
+struct RowRange {
+	row_t row_start;
+	idx_t count;
+};
+
+//! The rows that the commits after an index build's build point append or delete, for the build to catch up on.
 class IndexBuildLog {
 public:
 	IndexBuildLog(transaction_t creator_id, transaction_t build_commit, unordered_set<column_t> column_ids);
@@ -36,12 +41,14 @@ public:
 
 	//! Logs consecutive rows that a commit appended or deleted
 	void LogRows(transaction_t commit_id, row_t row_start, idx_t count);
+	//! Logs the rows at these offsets from base_row that a commit deleted
+	void LogRows(transaction_t commit_id, row_t base_row, const uint16_t *rows, idx_t count);
 	//! Logs a committed update of a column
 	void LogUpdate(transaction_t commit_id, column_t column_id);
 
-	//! Takes the sorted, distinct rows that the commits up to and including this one changed. Throws if one of them
-	//! updated an indexed column.
-	vector<row_t> TakeChanges(transaction_t commit_id);
+	//! Takes the rows that the commits up to and including this one changed, as sorted, disjoint ranges. Throws if
+	//! one of them updated an indexed column.
+	vector<RowRange> TakeChanges(transaction_t commit_id);
 	//! Marks the changes up to and including this commit as caught up on
 	void SetCaughtUp(transaction_t commit_id);
 

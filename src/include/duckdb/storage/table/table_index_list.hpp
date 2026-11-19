@@ -45,7 +45,7 @@ public:
 	TableIndexIterationHelper<shared_ptr<IndexEntry>> IndexEntries() const;
 	//! Adds an index entry to the list of index entries, and returns it.
 	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode,
-	                                transaction_t added_after_commit);
+	                                transaction_t added_after_commit = 0);
 	//! Initializes the transaction-local delete and append indexes.
 	void InitializeLocalIndexes(TableIndexList &delete_indexes, TableIndexList &append_indexes) const;
 	//! Appends a chunk to all index entries.
@@ -60,8 +60,9 @@ public:
 	//! Appends deleted rows to all unique indexes.
 	void AppendToDeleteIndexes(DataChunk &chunk, Vector &row_ids);
 	//! Applies a removal or removal rollback to the index entries added before the commit with this id.
-	void RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, transaction_t commit_id, IndexRemovalType removal_type,
-	                       optional_idx active_checkpoint = optional_idx());
+	void RemoveFromIndexes(DataChunk &chunk, Vector &row_ids, IndexRemovalType removal_type,
+	                       optional_idx active_checkpoint = optional_idx(),
+	                       transaction_t commit_id = MAX_TRANSACTION_ID);
 	//! Removes an index entry from the list of index entries and release any storage the index owns.
 	void RemoveIndex(idx_t index_oid);
 	//! Returns the entry matching the index OID.
@@ -122,15 +123,22 @@ public:
 	//! Merge any changes added to deltas during a checkpoint back into the main indexes
 	void MergeCheckpointDeltas(optional_idx checkpoint_id) const;
 
-	//! Registers an index build that catches up on the commits after its scan point.
+	//! Registers an index build that catches up on the commits after its build point.
 	void AddIndexBuild(shared_ptr<IndexBuildLog> build);
 	void RemoveIndexBuild(const IndexBuildLog &build);
-	//! Returns the index builds in progress.
-	vector<shared_ptr<IndexBuildLog>> GetIndexBuilds() const;
-	//! Logs consecutive rows that a commit appended or deleted, for the index builds in progress.
-	void LogRowsForIndexBuilds(transaction_t commit_id, row_t row_start, idx_t count) const;
-	//! Logs a committed update of a column, for the index builds in progress.
-	void LogUpdateForIndexBuilds(transaction_t commit_id, column_t column_id) const;
+	//! Returns the index build of this transaction, if any.
+	shared_ptr<IndexBuildLog> FindIndexBuild(transaction_t creator_id) const;
+	//! Calls the function for each index build in progress, if any.
+	template <class F>
+	void ForEachIndexBuild(F &&f) const {
+		if (index_build_count == 0) {
+			return;
+		}
+		lock_guard<mutex> lock(index_builds_lock);
+		for (auto &build : index_builds) {
+			f(*build);
+		}
+	}
 	//! Returns true, if all indexes
 	//! Find the foreign key matching the keys.
 	shared_ptr<IndexEntry> FindForeignKeyIndex(const vector<PhysicalIndex> &fk_keys, const ForeignKeyType fk_type);

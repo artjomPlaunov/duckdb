@@ -134,7 +134,7 @@ PhysicalOperator &PhysicalPlanGenerator::CreatePlan(LogicalCreateIndex &op) {
 	D_ASSERT(op.info->scan_types.size() - 1 <= op.info->column_ids.size());
 
 	D_ASSERT(op.children.size() == 1);
-	// an index type with its own plan publishes without catching up, so its scan reads the table as before
+	// only the generic plan catches up on the commits after its scan
 	if (!index_type->create_plan && op.children[0]->type == LogicalOperatorType::LOGICAL_GET) {
 		auto &get = op.children[0]->Cast<LogicalGet>();
 		get.bind_data.write().Cast<TableScanBindData>().catch_up_index_build = true;
