@@ -20,7 +20,8 @@ class DuckTableEntry;
 class TableCatalogEntry;
 
 struct TableScanBindData : public TableFunctionData {
-	explicit TableScanBindData(TableCatalogEntry &table) : table(table), is_index_scan(false), is_create_index(false) {
+	explicit TableScanBindData(TableCatalogEntry &table)
+	    : table(table), is_index_scan(false), is_create_index(false), catch_up_index_build(false) {
 	}
 
 	//! The table to scan.
@@ -31,6 +32,8 @@ struct TableScanBindData : public TableFunctionData {
 	bool is_index_scan;
 	//! Whether or not the table scan is for index creation.
 	bool is_create_index;
+	//! Whether the index build catches up on the commits after this scan's build point.
+	bool catch_up_index_build;
 	//! In what order to scan the row groups
 	unique_ptr<RowGroupOrderOptions> order_options;
 	//! Subset of partition indices to scan, if null, scan all
@@ -45,6 +48,7 @@ public:
 		auto bind_data = make_uniq<TableScanBindData>(table);
 		bind_data->is_index_scan = is_index_scan;
 		bind_data->is_create_index = is_create_index;
+		bind_data->catch_up_index_build = catch_up_index_build;
 		bind_data->column_ids = column_ids;
 		bind_data->order_options = order_options ? make_uniq<RowGroupOrderOptions>(*order_options) : nullptr;
 		bind_data->partitions_to_scan =

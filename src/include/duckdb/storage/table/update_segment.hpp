@@ -35,8 +35,6 @@ public:
 public:
 	bool HasUpdates() const;
 	bool HasUncommittedUpdates(idx_t vector_index);
-	//! Whether the vector holds an update that the view does not see
-	bool HasInvisibleUpdates(const SnapshotView &view, idx_t vector_index);
 	bool HasUpdates(idx_t vector_index) const;
 	bool HasUpdates(idx_t start_row_idx, idx_t end_row_idx);
 

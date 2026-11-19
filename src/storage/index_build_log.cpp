@@ -16,7 +16,7 @@ ScanOptions IndexBuildLog::GetScanOptions() const {
 	ScanOptions options(TransactionData(creator_id, VisibilityBound::Through(build_commit)));
 	// the creator's own deletes reach the index through its commit
 	options.delete_type = DeletedScanType::OMIT_COMMITTED_DELETES;
-	options.update_type = UpdateScanType::DISALLOW_INVISIBLE_UPDATES;
+	options.update_type = UpdateScanType::DISALLOW_UPDATES;
 	return options;
 }
 

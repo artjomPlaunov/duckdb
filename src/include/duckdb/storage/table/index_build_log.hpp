@@ -31,10 +31,6 @@ public:
 	transaction_t GetCaughtUpCommit() const {
 		return caught_up_commit;
 	}
-	//! The physical columns that the build scans
-	const unordered_set<column_t> &GetColumnIds() const {
-		return column_ids;
-	}
 	//! Returns the number of logged rows the build has not caught up on
 	idx_t PendingRows() const;
 

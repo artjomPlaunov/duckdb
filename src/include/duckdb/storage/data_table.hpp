@@ -266,6 +266,8 @@ public:
 	                           vector<ColumnSegmentInfo> &result);
 
 	//! Scans the next chunk for the CREATE INDEX operator
+	bool CreateIndexScan(TableScanState &state, DataChunk &result);
+	//! Scans the next chunk for a CREATE INDEX that catches up on the commits after the build point
 	bool CreateIndexScan(TableScanState &state, DataChunk &result, const IndexBuildLog &build);
 	//! Initialize constraint verification state
 	unique_ptr<ConstraintState> InitializeConstraintState(TableCatalogEntry &table,
@@ -303,11 +305,10 @@ public:
 	//! It is either empty, or initialized via its index storage information.
 	void AddIndex(const ColumnList &columns, const vector<LogicalIndex> &column_indexes, const IndexConstraintType type,
 	              IndexStorageInfo index_info, idx_t index_oid, ConstraintCheckMode check_mode);
-	//! Adds an index to this table's index list and returns its entry; waits for any commit in progress.
-	//! An index built by a scan of this table first catches up on the commits after the scan's build point.
+	//! Adds an index to this table's index list and returns its entry.
 	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid,
 	                                ConstraintCheckMode check_mode = ConstraintCheckMode::DEFAULT);
-	//! Adds an index that this transaction built, see AddIndex above.
+	//! Adds an index that this transaction built between two commits, after catching up on the commits after its scan.
 	shared_ptr<IndexEntry> AddIndex(DuckTransaction &creator, unique_ptr<Index> index, idx_t index_oid,
 	                                ConstraintCheckMode check_mode);
 	//! Starts an index build over these columns: later commits log the rows they change for it
@@ -337,8 +338,6 @@ private:
 
 	//! Rebuild all indexes after vacuuming changed rowid's (used with vacuum_rebuild_indexes setting).
 	void RebuildIndexes();
-	shared_ptr<IndexEntry> AddIndex(shared_ptr<IndexBuildLog> build, unique_ptr<Index> index, idx_t index_oid,
-	                                ConstraintCheckMode check_mode);
 	//! Adds and removes the rows that the commits up to and including this one changed since the build caught up
 	void CatchUpIndexBuild(IndexBuildLog &build, BoundIndex &index, transaction_t commit_id);
 	//! Appends the rows live in the live view but not the other view to the index, or deletes them from it

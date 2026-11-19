@@ -32,9 +32,7 @@ enum class UpdateScanType {
 	//! allow updates
 	STANDARD,
 	// disallow updates - throw on updates
-	DISALLOW_UPDATES,
-	//! allow the updates the transaction sees - throw on the others
-	DISALLOW_INVISIBLE_UPDATES
+	DISALLOW_UPDATES
 };
 
 enum class StringScanType {

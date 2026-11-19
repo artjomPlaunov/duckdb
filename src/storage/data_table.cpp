@@ -371,6 +371,10 @@ void DataTable::Scan(DuckTransaction &transaction, DataChunk &result, TableScanS
 	local_storage.Scan(state.local_state, state.GetColumnIds(), result);
 }
 
+bool DataTable::CreateIndexScan(TableScanState &state, DataChunk &result) {
+	return state.table_state.Scan(result, TableScanType::TABLE_SCAN_OMIT_PERMANENTLY_DELETED);
+}
+
 bool DataTable::CreateIndexScan(TableScanState &state, DataChunk &result, const IndexBuildLog &build) {
 	return state.table_state.Scan(build.GetScanOptions(), result);
 }
@@ -407,8 +411,8 @@ void DataTable::UnregisterIndexBuild(const IndexBuildLog &build) {
 	info->indexes.RemoveIndexBuild(build);
 }
 
-void DataTable::ApplyIndexBuildRows(BoundIndex &index, vector<row_t> &rows, TransactionData live,
-                                    TransactionData other, bool append) {
+void DataTable::ApplyIndexBuildRows(BoundIndex &index, vector<row_t> &rows, TransactionData live, TransactionData other,
+                                    bool append) {
 	auto types = GetTypes();
 	vector<column_t> indexed_columns(index.GetColumnIdSet().begin(), index.GetColumnIdSet().end());
 	std::sort(indexed_columns.begin(), indexed_columns.end());
@@ -502,13 +506,7 @@ void DataTable::CatchUpIndexBuild(IndexBuildLog &build, BoundIndex &index, trans
 }
 
 shared_ptr<IndexEntry> DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode) {
-	// without the creator, catch up only if the build is the only one on this table, over the index's columns
-	auto builds = info->indexes.GetIndexBuilds();
-	shared_ptr<IndexBuildLog> build;
-	if (builds.size() == 1 && builds[0]->GetColumnIds() == index->GetColumnIdSet()) {
-		build = builds[0];
-	}
-	return AddIndex(std::move(build), std::move(index), index_oid, check_mode);
+	return info->indexes.AddIndex(std::move(index), index_oid, check_mode, 0);
 }
 
 shared_ptr<IndexEntry> DataTable::AddIndex(DuckTransaction &creator, unique_ptr<Index> index, idx_t index_oid,
@@ -519,11 +517,6 @@ shared_ptr<IndexEntry> DataTable::AddIndex(DuckTransaction &creator, unique_ptr<
 			build = entry;
 		}
 	}
-	return AddIndex(std::move(build), std::move(index), index_oid, check_mode);
-}
-
-shared_ptr<IndexEntry> DataTable::AddIndex(shared_ptr<IndexBuildLog> build, unique_ptr<Index> index,
-                                           idx_t index_oid, ConstraintCheckMode check_mode) {
 	auto &transaction_manager = DuckTransactionManager::Get(db);
 	optional_ptr<BoundIndex> bound_index;
 	if (build && index->IsBound()) {
