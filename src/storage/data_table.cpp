@@ -423,11 +423,14 @@ void DataTable::CatchUpIndexBuild(IndexBuildLog &build, BoundIndex &index, trans
 }
 
 void DataTable::AddIndex(unique_ptr<Index> index, idx_t index_oid) {
-	info->indexes.AddIndex(std::move(index), index_oid, ConstraintCheckMode::DEFAULT);
+	// publish between commits: a commit reads the index list several times under the commit lock
+	auto commit_lock = db.GetStorageManager().GetCommitLock();
+	auto last_commit = DuckTransactionManager::Get(db).GetLastCommit();
+	info->indexes.AddIndex(std::move(index), index_oid, ConstraintCheckMode::DEFAULT, last_commit);
 }
 
-shared_ptr<IndexEntry> DataTable::PublishIndex(DuckTransaction &creator, unique_ptr<BoundIndex> index, idx_t index_oid,
-                                               ConstraintCheckMode check_mode) {
+shared_ptr<IndexEntry> DataTable::AddIndex(DuckTransaction &creator, unique_ptr<BoundIndex> index, idx_t index_oid,
+                                           ConstraintCheckMode check_mode) {
 	auto build = info->indexes.FindIndexBuild(creator.GetTransactionId());
 	auto &transaction_manager = DuckTransactionManager::Get(db);
 	// catch up outside the commit lock while the commits leave many rows behind, so that the final round is short

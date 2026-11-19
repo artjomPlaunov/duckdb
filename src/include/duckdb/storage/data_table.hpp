@@ -307,8 +307,8 @@ public:
 	//! AddIndex moves an index to this table's index list.
 	void AddIndex(unique_ptr<Index> index, idx_t index_oid);
 	//! Catches up the index this transaction built and adds it to the index list between two commits.
-	shared_ptr<IndexEntry> PublishIndex(DuckTransaction &creator, unique_ptr<BoundIndex> index, idx_t index_oid,
-	                                    ConstraintCheckMode check_mode);
+	shared_ptr<IndexEntry> AddIndex(DuckTransaction &creator, unique_ptr<BoundIndex> index, idx_t index_oid,
+	                                ConstraintCheckMode check_mode);
 	//! Starts an index build over these columns: later commits log the rows they change for it
 	shared_ptr<IndexBuildLog> RegisterIndexBuild(DuckTransaction &creator, unordered_set<column_t> column_ids);
 	void UnregisterIndexBuild(const IndexBuildLog &build);

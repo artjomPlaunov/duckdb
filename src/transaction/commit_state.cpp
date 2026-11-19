@@ -401,9 +401,16 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			throw TransactionException("Attempting to modify table %s but another transaction has %s this table",
 			                           table_name, table_modification);
 		}
+		auto &indexes = info->table->GetStorage().GetDataTableInfo()->GetIndexes();
+		if (!indexes.Empty() && indexes.GetIndexedColumns().count(info->column_index)) {
+			// updates of indexed columns run as a delete and an insert: this one was planned before the index existed
+			auto table_name = info->table->GetStorage().GetTableName();
+			throw TransactionException("Attempting to modify table %s but another transaction has created an index on "
+			                           "an updated column of this table",
+			                           table_name);
+		}
 		info->version_number = commit_id;
-		info->table->GetStorage().GetDataTableInfo()->GetIndexes().ForEachIndexBuild(
-		    [&](IndexBuildLog &build) { build.LogUpdate(commit_id, info->column_index); });
+		indexes.ForEachIndexBuild([&](IndexBuildLog &build) { build.LogUpdate(commit_id, info->column_index); });
 		break;
 	}
 	case UndoFlags::UPDATE_ROWS: {
