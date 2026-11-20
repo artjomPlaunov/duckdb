@@ -89,6 +89,7 @@ set(TEST_API_OBJECTS
     test_worker_exception.cpp
     test_buffer_pool_eviction.cpp
     test_block_allocator_tls.cpp
+    test_deferred_checkpoint_publication.cpp
     test_data_table_scan_without_row_groups.cpp)
 
 if(NOT WIN32)
