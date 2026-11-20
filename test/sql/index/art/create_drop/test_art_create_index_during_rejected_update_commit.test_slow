@@ -26,7 +26,7 @@ concurrentforeach role con_t con_x
 
 onlyif role=con_x
 statement maybe
-CREATE INDEX idx_build ON ${target};
+CREATE INDEX idx_build ON {target};
 ----
 outstanding updates
 
@@ -61,7 +61,7 @@ another transaction has created an index on an updated column
 endloop
 
 statement ok
-CREATE INDEX IF NOT EXISTS idx_build ON ${target};
+CREATE INDEX IF NOT EXISTS idx_build ON {target};
 
 query I
 SELECT count(*) FROM t WHERE u = 5

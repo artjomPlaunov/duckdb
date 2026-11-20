@@ -40,7 +40,7 @@ SELECT count(*) FROM t WHERE k = id + 1 AND hash(k) IS NOT NULL;
 loop i 0 8
 
 query I
-SELECT (SELECT count(*) FROM t WHERE k = ${i}) = (SELECT count(*) FROM t WHERE k = ${i} AND hash(k) IS NOT NULL);
+SELECT (SELECT count(*) FROM t WHERE k = {i}) = (SELECT count(*) FROM t WHERE k = {i} AND hash(k) IS NOT NULL);
 ----
 true
 
