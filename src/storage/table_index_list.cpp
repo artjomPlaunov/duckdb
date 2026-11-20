@@ -287,17 +287,6 @@ void TableIndexList::VerifyBuffers() const {
 	}
 }
 
-void TableIndexList::VerifyUpdate(const vector<PhysicalIndex> &column_ids) const {
-#ifdef DEBUG
-	annotated_lock_guard lock(index_entries_lock);
-	for (const auto &entry : index_entries) {
-		entry->VerifyUpdate(column_ids);
-	}
-#else
-	(void)column_ids;
-#endif
-}
-
 vector<IndexInfo> TableIndexList::GetStorageInfo() const {
 	annotated_lock_guard lock(index_entries_lock);
 	vector<IndexInfo> result;

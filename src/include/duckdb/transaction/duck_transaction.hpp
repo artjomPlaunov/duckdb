@@ -75,6 +75,8 @@ public:
 
 	bool ShouldWriteToWAL(AttachedDatabase &db);
 	ErrorData PreFlushOptimisticBlocks(ClientContext &context, AttachedDatabase &db) noexcept;
+	//! Refuses in-place updates of columns an index or an index build covers. Runs before the commit changes anything
+	ErrorData VerifyInPlaceUpdates() noexcept;
 	//! Appends the local storage to the tables; with a WAL, the commit state records the optimistically written blocks
 	ErrorData AppendLocalStorage(ClientContext &context, AttachedDatabase &db,
 	                             unique_ptr<StorageCommitState> &commit_state) noexcept;

@@ -99,8 +99,6 @@ public:
 	void Rebuild(const IndexRebuildScan &scan);
 	//! Verifies the buffers of all bound indexes and their delete deltas.
 	void VerifyBuffers() const;
-	//! Verifies that no index is updated by the given columns.
-	void VerifyUpdate(const vector<PhysicalIndex> &column_ids) const;
 	//! Returns table storage metadata for all indexes.
 	vector<IndexInfo> GetStorageInfo() const;
 	//! Returns the combined in-memory size of all bound indexes.

@@ -53,6 +53,8 @@ public:
 
 	bool ChangesMade();
 	UndoBufferProperties GetProperties();
+	//! Throws if an in-place update changed a column that an index or an index build in progress covers
+	void VerifyInPlaceUpdates();
 
 	//! Cleanup the undo buffer
 	void Cleanup(VisibilityBound lowest_visibility_bound);

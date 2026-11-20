@@ -427,15 +427,6 @@ string IndexEntry::GetConstraintViolationMessage(const VerifyExistenceType verif
 	return owned_index->Cast<BoundIndex>().GetConstraintViolationMessage(verify_type, failed_index, input);
 }
 
-void IndexEntry::VerifyUpdate(const vector<PhysicalIndex> &column_ids) const {
-#ifdef DEBUG
-	auto entry_lock = lock.GetSharedLock();
-	D_ASSERT(owned_index->IsBound());
-	const auto &bound_index = owned_index->Cast<BoundIndex>();
-	D_ASSERT(!bound_index.IndexIsUpdated(column_ids));
-#endif
-}
-
 void IndexEntry::Vacuum() {
 	auto entry_lock = lock.GetExclusiveLock();
 	if (owned_index->IsBound()) {

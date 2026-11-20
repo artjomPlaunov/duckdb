@@ -1551,9 +1551,6 @@ void DataTable::VerifyUpdateConstraints(ConstraintState &state, ClientContext &c
 			throw NotImplementedException("Constraint type not implemented!");
 		}
 	}
-	// Ensure that we never call UPDATE for indexed columns.
-	// Instead, we must rewrite these updates into DELETE + INSERT.
-	info->indexes.VerifyUpdate(column_ids);
 }
 
 unique_ptr<TableUpdateState> DataTable::InitializeUpdate(TableCatalogEntry &table, ClientContext &context,

@@ -12,9 +12,7 @@
 #include "duckdb/catalog/duck_catalog.hpp"
 #include "duckdb/common/serializer/binary_deserializer.hpp"
 #include "duckdb/common/serializer/memory_stream.hpp"
-#include "duckdb/main/attached_database.hpp"
 #include "duckdb/storage/block_manager.hpp"
-#include "duckdb/storage/storage_manager.hpp"
 #include "duckdb/storage/table/chunk_info.hpp"
 #include "duckdb/storage/table/column_data.hpp"
 #include "duckdb/storage/table/row_version_manager.hpp"
@@ -276,6 +274,18 @@ void CommitState::CommitEntryDrop(CatalogEntry &entry, data_ptr_t dataptr, Commi
 	}
 }
 
+template <class F>
+static void LogForIndexBuilds(DataTable &storage, F &&log) {
+	// the entry has already changed the table and its indexes, and the revert skips the entry that failed
+	try {
+		storage.GetDataTableInfo()->GetIndexes().ForEachIndexBuild(log);
+	} catch (std::exception &ex) {
+		throw FatalException(ErrorData(ex).Message());
+	} catch (...) {
+		throw FatalException("unknown failure in logging the rows for an index build");
+	}
+}
+
 void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info) {
 	switch (type) {
 	case UndoFlags::CATALOG_ENTRY: {
@@ -376,8 +386,7 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 		auto &storage = info->table->GetStorage();
 		storage.CommitAppend(commit_id, info->start_row, info->count);
 		auto row_start = UnsafeNumericCast<row_t>(info->start_row);
-		storage.GetDataTableInfo()->GetIndexes().ForEachIndexBuild(
-		    [&](IndexBuildLog &build) { build.LogRows(commit_id, row_start, info->count); });
+		LogForIndexBuilds(storage, [&](IndexBuildLog &build) { build.LogRows(commit_id, row_start, info->count); });
 		break;
 	}
 	case UndoFlags::DELETE_TUPLE: {
@@ -404,13 +413,6 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 			throw TransactionException("Attempting to modify table %s but another transaction has %s this table",
 			                           table_name, table_modification);
 		}
-		if (IsIndexedColumn(*info)) {
-			// updates of indexed columns run as a delete and an insert: this one was planned before the index existed
-			auto table_name = info->table->GetStorage().GetTableName();
-			throw TransactionException("Attempting to modify table %s but another transaction has created an index on "
-			                           "an updated column of this table",
-			                           table_name);
-		}
 		info->version_number = commit_id;
 		break;
 	}
@@ -429,8 +431,7 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info)
 }
 
 void CommitState::LogDeleteForIndexBuilds(DeleteInfo &info) {
-	auto &indexes = info.table->GetStorage().GetDataTableInfo()->GetIndexes();
-	indexes.ForEachIndexBuild([&](IndexBuildLog &build) {
+	LogForIndexBuilds(info.table->GetStorage(), [&](IndexBuildLog &build) {
 		auto row_start = UnsafeNumericCast<row_t>(info.base_row);
 		idx_t count = info.count;
 		if (!info.is_consecutive) {
@@ -447,24 +448,6 @@ void CommitState::LogDeleteForIndexBuilds(DeleteInfo &info) {
 		}
 		build.LogRows(commit_id, row_start, count);
 	});
-}
-
-bool CommitState::IsIndexedColumn(UpdateInfo &info) {
-	auto &storage = info.table->GetStorage();
-	if (!storage.db.GetStorageManager().IsLoaded()) {
-		// a replayed update committed before any later index existed
-		return false;
-	}
-	if (indexed_columns_table.get() != &storage) {
-		// publishing an index or starting a build takes the commit lock: the columns can only shrink during the commit
-		indexed_columns_table = storage;
-		auto &indexes = storage.GetDataTableInfo()->GetIndexes();
-		indexed_columns = indexes.GetIndexedColumns();
-		indexes.ForEachIndexBuild([&](IndexBuildLog &build) {
-			indexed_columns.insert(build.GetColumnIds().begin(), build.GetColumnIds().end());
-		});
-	}
-	return indexed_columns.count(info.column_index) > 0;
 }
 
 void CommitState::CommitDelete(DeleteInfo &info, transaction_t old_id) {

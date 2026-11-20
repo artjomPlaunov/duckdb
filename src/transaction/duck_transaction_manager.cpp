@@ -398,6 +398,10 @@ ErrorData DuckTransactionManager::CommitTransaction(ClientContext &context, Tran
 		held_commit_lock = db.GetStorageManager().GetCommitLock();
 		// a commit that failed while we waited for the commit lock may have invalidated the database
 		error = db.InvalidationError("commit");
+		// the indexed columns are fixed while the commit lock is held; replayed updates predate any later index
+		if (!error.HasError() && undo_properties.has_updates && db.GetStorageManager().IsLoaded()) {
+			error = transaction.VerifyInPlaceUpdates();
+		}
 
 		if (!error.HasError() && !skip_wal_write_due_to_checkpoint) {
 			error = transaction.AppendLocalStorage(context, db, commit_state);

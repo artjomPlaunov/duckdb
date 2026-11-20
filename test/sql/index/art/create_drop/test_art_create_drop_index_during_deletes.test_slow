@@ -13,7 +13,7 @@ statement ok
 SET checkpoint_threshold = '1TB';
 
 statement ok
-CREATE TABLE db.t AS SELECT range AS i, range % 100 AS j FROM range(400000);
+CREATE TABLE db.t AS SELECT range AS i, range % 100000 AS j FROM range(400000);
 
 concurrentloop threadid 0 4
 
@@ -26,7 +26,7 @@ CREATE INDEX idx ON db.t(j);
 # the lookup through idx skips the rows deleted while it was built
 onlyif threadid=0
 query I
-SELECT (SELECT count(*) FROM db.t WHERE j = 7) = (SELECT count(*) FROM db.t WHERE j + 0 = 7);
+SELECT (SELECT count(*) FROM db.t WHERE j = 7) = (SELECT count(*) FROM db.t WHERE j = 7 AND hash(j) IS NOT NULL);
 ----
 true
 

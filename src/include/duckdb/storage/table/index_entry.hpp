@@ -155,8 +155,6 @@ public:
 	                      ConflictManager &conflict_manager);
 	//! Constructs the physical index's constraint violation message.
 	string GetConstraintViolationMessage(VerifyExistenceType verify_type, idx_t failed_index, DataChunk &input) const;
-	//! Verifies that the physical index is not updated by the given columns.
-	void VerifyUpdate(const vector<PhysicalIndex> &column_ids) const;
 	//! Vacuums the physical index if it is bound.
 	void Vacuum();
 	//! Rebuilds the bound physical index with chunks supplied by the scan callback.

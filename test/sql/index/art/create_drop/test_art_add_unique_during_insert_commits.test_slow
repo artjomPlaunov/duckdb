@@ -37,7 +37,7 @@ foreach i 0 13 26 39
 loop j 0 10
 
 query I
-SELECT (SELECT count(*) FROM t WHERE c{j} = 10000000 + {i} * 100000 + 99999) = (SELECT count(*) FROM t WHERE c{j} + 0 = 10000000 + {i} * 100000 + 99999);
+SELECT (SELECT count(*) FROM t WHERE c{j} = 10000000 + {i} * 100000 + 99999) = (SELECT count(*) FROM t WHERE c{j} = 10000000 + {i} * 100000 + 99999 AND hash(c{j}) IS NOT NULL);
 ----
 true
 

@@ -13,7 +13,6 @@
 #include "duckdb/common/enums/index_removal_type.hpp"
 #include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/common/reference_map.hpp"
-#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/storage/block.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 
@@ -110,16 +109,11 @@ private:
 	void CommitDelete(DeleteInfo &info, transaction_t old_id);
 	//! Logs the deleted rows for the index builds in progress on the table
 	void LogDeleteForIndexBuilds(DeleteInfo &info);
-	//! Whether an index or an index build in progress covers the updated column
-	bool IsIndexedColumn(UpdateInfo &info);
 
 private:
 	DuckTransaction &transaction;
 	transaction_t commit_id;
 	IndexDataRemover index_data_remover;
-	//! The table whose indexed columns are in indexed_columns
-	optional_ptr<DataTable> indexed_columns_table;
-	unordered_set<column_t> indexed_columns;
 };
 
 } // namespace duckdb

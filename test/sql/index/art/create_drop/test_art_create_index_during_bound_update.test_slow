@@ -1,0 +1,47 @@
+# name: test/sql/index/art/create_drop/test_art_create_index_during_bound_update.test_slow
+# description: An in-place update bound before CREATE INDEX publishes and applied after it fails at commit
+# group: [create_drop]
+
+statement ok
+CREATE TABLE t(id BIGINT, k BIGINT);
+
+statement ok
+INSERT INTO t SELECT i, i FROM range(1000) r(i);
+
+concurrentforeach role con_u con_x
+
+# con_u: binds an in-place update of k, then evaluates the slow subquery before the update is applied
+onlyif role=con_u
+statement maybe
+UPDATE t SET k = k + 1 WHERE id = (SELECT sum(hash(i)) % 7 FROM range(100000000) r(i));
+----
+another transaction has created an index on an updated column
+
+onlyif role=con_x
+sleep 300 millisecond
+
+onlyif role=con_x
+statement maybe
+CREATE INDEX idx_k ON t(k);
+----
+Cannot create index with outstanding updates
+
+endloop
+
+statement ok
+CREATE INDEX IF NOT EXISTS idx_k ON t(k);
+
+# the index agrees with a sequential scan
+query I
+SELECT count(*) FROM t WHERE k = id + 1 AND hash(k) IS NOT NULL;
+----
+<REGEX>:[01]
+
+loop i 0 8
+
+query I
+SELECT (SELECT count(*) FROM t WHERE k = ${i}) = (SELECT count(*) FROM t WHERE k = ${i} AND hash(k) IS NOT NULL);
+----
+true
+
+endloop

@@ -203,6 +203,15 @@ bool DuckTransaction::ShouldWriteToWAL(AttachedDatabase &db) {
 	return true;
 }
 
+ErrorData DuckTransaction::VerifyInPlaceUpdates() noexcept {
+	try {
+		undo_buffer.VerifyInPlaceUpdates();
+	} catch (std::exception &ex) {
+		return ErrorData(ex);
+	}
+	return ErrorData();
+}
+
 ErrorData DuckTransaction::PreFlushOptimisticBlocks(ClientContext &context, AttachedDatabase &db) noexcept {
 	ErrorData error;
 	if (!ShouldWriteToWAL(db)) {

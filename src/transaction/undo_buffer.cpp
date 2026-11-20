@@ -6,15 +6,19 @@
 #include "duckdb/catalog/catalog_entry/list.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/pair.hpp"
+#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/execution/index/bound_index.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/storage/table/index_build_log.hpp"
+#include "duckdb/storage/table/table_index_list.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/transaction/cleanup_state.hpp"
 #include "duckdb/transaction/commit_state.hpp"
 #include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/transaction/rollback_state.hpp"
+#include "duckdb/transaction/update_info.hpp"
 #include "duckdb/transaction/wal_write_state.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 
@@ -106,6 +110,33 @@ void UndoBuffer::ReverseIterateEntries(T &&callback) {
 bool UndoBuffer::ChangesMade() {
 	// we need to search for any index creation entries
 	return allocator.head.get();
+}
+
+void UndoBuffer::VerifyInPlaceUpdates() {
+	optional_ptr<DataTable> table;
+	unordered_set<column_t> indexed_columns;
+	IteratorState iterator_state;
+	IterateEntries(iterator_state, [&](UndoFlags entry_type, data_ptr_t data) {
+		if (entry_type != UndoFlags::UPDATE_TUPLE) {
+			return;
+		}
+		auto &info = *reinterpret_cast<UpdateInfo *>(data);
+		auto &storage = info.table->GetStorage();
+		if (table.get() != &storage) {
+			table = storage;
+			auto &indexes = storage.GetDataTableInfo()->GetIndexes();
+			indexed_columns = indexes.GetIndexedColumns();
+			indexes.ForEachIndexBuild([&](IndexBuildLog &build) {
+				indexed_columns.insert(build.GetColumnIds().begin(), build.GetColumnIds().end());
+			});
+		}
+		if (indexed_columns.count(info.column_index) > 0) {
+			// updates of indexed columns run as a delete and an insert: this one was planned before the index existed
+			throw TransactionException("Attempting to modify table %s but another transaction has created an index on "
+			                           "an updated column of this table",
+			                           storage.GetTableName());
+		}
+	});
 }
 
 UndoBufferProperties UndoBuffer::GetProperties() {
