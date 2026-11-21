@@ -57,6 +57,7 @@
         "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test",
         "test/sql/delete/test_parallel_delete_transaction_local.test",
         "test/sql/index/art/nodes/test_art_prefix_transform_deprecated_create.test",
+        "test/sql/index/art/storage/test_art_checkpoint_retains_clean_buffers.test",
         "test/sql/topn/topn_dynamic_filter_cast.test",
         "test/sql/progress/test_verify_progress.test",
         "test/sql/copy/partitioned/partitioned_write_backpressure.test",
