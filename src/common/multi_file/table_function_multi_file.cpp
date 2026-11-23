@@ -593,6 +593,12 @@ void TableFunctionMultiFileWrapper::GetVirtualColumns(ClientContext &context, Mu
 	}
 }
 
+void TableFunctionMultiFileWrapper::ReadFilesForStatistics(ClientContext &context, MultiFileBindData &bind_data) {
+	auto &data = bind_data.bind_data->Cast<TableFunctionMultiFileData>();
+	bind_data.multi_file_reader->ReadFilesForStatistics(context, *bind_data.file_list, bind_data, data.options,
+	                                                    bind_data.file_options);
+}
+
 void TableFunctionMultiFileWrapper::FinalizeBindData(MultiFileBindData &multi_file_data) {
 	auto &data = multi_file_data.bind_data->Cast<TableFunctionMultiFileData>();
 	if (multi_file_data.initial_reader) {
@@ -718,14 +724,44 @@ shared_ptr<BaseFileReader> TableFunctionMultiFileWrapper::CreateReader(ClientCon
 	return std::move(result);
 }
 
+//! The bytes a row is taken to have when a scan's row count is estimated from the sizes of its files alone: the
+//! floor the parquet reader puts under the ratio it measures in an opened file. A deliberate overestimate of the rows,
+//! the same for every format this wrapper serves - a read_csv or read_json row is typically much wider - since
+//! estimating too many rows is safer than estimating none.
+static constexpr idx_t MIN_ESTIMATED_BYTES_PER_ROW = 10;
+
+//! The row count the caller gives for the whole scan, read_parquet's explicit_cardinality (0 means not given). Looked
+//! up by name, by convention: read_parquet is the only wrapped function that declares it
+static optional_idx ExplicitCardinality(const TableFunctionMultiFileData &data) {
+	auto entry = data.options.named_parameters.find(Identifier("explicit_cardinality"));
+	if (entry == data.options.named_parameters.end() || entry->second.IsNull()) {
+		return optional_idx();
+	}
+	auto cardinality = entry->second.DefaultCastAs(LogicalType::UBIGINT).GetValue<uint64_t>();
+	if (cardinality == 0) {
+		return optional_idx();
+	}
+	return optional_idx(cardinality);
+}
+
 unique_ptr<NodeStatistics> TableFunctionMultiFileWrapper::GetCardinality(ClientContext &context,
                                                                          const MultiFileBindData &bind_data,
                                                                          idx_t file_count) {
 	auto &data = bind_data.bind_data->Cast<TableFunctionMultiFileData>();
-	if (!data.cardinality.IsValid()) {
-		return nullptr;
+	auto explicit_cardinality = ExplicitCardinality(data);
+	if (explicit_cardinality.IsValid()) {
+		return make_uniq<NodeStatistics>(explicit_cardinality.GetIndex());
 	}
-	return make_uniq<NodeStatistics>(data.cardinality.GetIndex() * file_count);
+	if (data.cardinality.IsValid()) {
+		return make_uniq<NodeStatistics>(data.cardinality.GetIndex() * file_count);
+	}
+	// no file was opened at bind (e.g. because the schema was given): estimate from the sizes of the files, when
+	// the file list carries them (a local glob, or a list of {filename, file_size} structs)
+	auto rows_per_file = bind_data.file_list->EstimateRowsPerFile(MIN_ESTIMATED_BYTES_PER_ROW);
+	if (rows_per_file.IsValid()) {
+		return make_uniq<NodeStatistics>(rows_per_file.GetIndex() * file_count);
+	}
+	return nullptr;
 }
 
 //===--------------------------------------------------------------------===//

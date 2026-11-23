@@ -55,6 +55,8 @@
       "paths": [
         "test/sql/storage/compression/zstd/zstd_compression_ratio.test_slow",
         "test/sql/logging/logging_memory_after_truncate.test",
+        "test/sql/logging/logging_deprecated_names.test",
+        "test/sql/logging/logging_scan_progress.test",
         "test/sql/logging/physical_operator_logging.test_slow",
         "test/sql/cte/recursive_cte_logging.test",
         "test/sql/cte/recursive_cte_invariant_build_logging.test",
@@ -75,6 +77,13 @@
         "test/sql/copy/parquet/parquet_prefetch_cost_model.test",
         "test/sql/copy/parquet/parquet_prefetch_cost_model_remote.test",
         "test/sql/copy/parquet/parquet_expression_filter_pruning.test",
+        "test/sql/copy/parquet/page_index/page_index_read.test",
+        "test/sql/copy/parquet/page_index/page_index_prefetch.test",
+        "test/sql/copy/parquet/page_index/page_index_reference.test",
+        "test/sql/copy/parquet/page_index/page_index_robustness.test",
+        "test/sql/copy/parquet/page_index/page_index_cache.test",
+        "test/sql/copy/parquet/page_index/page_index_cache_disabled.test",
+        "test/parquet/utf8_validation_page_index.test",
         "test/sql/copy/parquet/read_ahead/readahead_depth_learning.test",
         "test/sql/copy/parquet/read_ahead/readahead_dynamic_pruning.test",
         "test/sql/copy/parquet/read_ahead/readahead_dynamic_pruning_nulls_first.test",
@@ -158,7 +167,24 @@
         "test/sql/attach/external_resource_logging.test",
         "test/sql/attach/external_resource_option_collision.test",
         "test/sql/attach/external_resource_attach_failure.test",
-        "test/sql/attach/external_resource_null_handle.test"
+        "test/sql/attach/external_resource_null_handle.test",
+        "test/sql/attach/external_resource_external_access.test",
+        "test/sql/attach/external_resource_show_subquery.test",
+        "test/sql/attach/external_resource_show_with_type.test",
+        "test/sql/attach/external_resource_show_types.test",
+        "test/sql/attach/external_resource_type_dotted.test"
+      ]
+    },
+    {
+      "reason": "A temporary secret must still be there at the next statement, which a restart in between prevents.",
+      "paths": [
+        "test/sql/extensions/extension_repository_from_host_httpfs.test"
+      ]
+    },
+    {
+      "reason": "Asserts the in-memory operator log, which does not survive the forced restarts.",
+      "paths": [
+        "test/sql/cte/materialized/cte_buffered_consumer_cycle_demotion.test"
       ]
     }
   ]
