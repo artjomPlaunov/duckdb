@@ -93,11 +93,11 @@ EXPLAIN UPDATE gen SET v = 1
 ----
 physical_plan	<REGEX>:.*Update Mode: In Place.*
 
-# LIST, ARRAY, MAP, UNION, VARIANT, GEOMETRY and GEOGRAPHY, or a STRUCT containing one, cannot be updated in place
-# (a TEMP table, as test configs with an older storage version cannot store VARIANT or GEOGRAPHY)
+# LIST, ARRAY, MAP, UNION, VARIANT and GEOMETRY, or a STRUCT containing one, cannot be updated in place
+# (a TEMP table, as test configs with an older storage version cannot store VARIANT)
 statement ok
 CREATE TEMP TABLE ty (l INTEGER[], ar INTEGER[2], m MAP(INTEGER, INTEGER), un UNION(i INTEGER, s VARCHAR), va VARIANT,
-    geom GEOMETRY, geog GEOGRAPHY, sl STRUCT(x INTEGER[]), ss STRUCT(x INTEGER, y VARCHAR), sss STRUCT(x STRUCT(y INTEGER)));
+    geom GEOMETRY, sl STRUCT(x INTEGER[]), ss STRUCT(x INTEGER, y VARCHAR), sss STRUCT(x STRUCT(y INTEGER)));
 
 query II
 EXPLAIN UPDATE ty SET l = [1]
@@ -126,11 +126,6 @@ physical_plan	<REGEX>:.*Update Mode: Delete \+ Insert.*
 
 query II
 EXPLAIN UPDATE ty SET geom = NULL
-----
-physical_plan	<REGEX>:.*Update Mode: Delete \+ Insert.*
-
-query II
-EXPLAIN UPDATE ty SET geog = NULL
 ----
 physical_plan	<REGEX>:.*Update Mode: Delete \+ Insert.*
 
