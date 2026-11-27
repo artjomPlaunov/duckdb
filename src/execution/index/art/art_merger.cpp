@@ -3,7 +3,7 @@
 #include "duckdb/common/swap.hpp"
 #include "duckdb/execution/index/art/base_leaf.hpp"
 #include "duckdb/execution/index/art/node256_leaf.hpp"
-#include "duckdb/execution/index/art/prefix.hpp"
+#include "duckdb/execution/index/art/const_prefix_handle.hpp"
 #include "duckdb/execution/index/art/prefix_handle.hpp"
 #include "duckdb/execution/index/art/base_node.hpp"
 #include "duckdb/execution/index/art/node48.hpp"
@@ -135,13 +135,14 @@ ARTConflictType ARTMerger::MergeNodeAndInlined(NodePtr &left_ptr, NodeEntry &ent
 
 array_ptr<uint8_t> ARTMerger::GetBytes(NodePtr &leaf_ptr) {
 	const auto type = leaf_ptr.GetType();
+	ConstNodeHandle handle(art, leaf_ptr);
 	switch (type) {
 	case NType::NODE_7_LEAF:
-		return NodePtr::Ref<Node7Leaf>(art, leaf_ptr, type).GetBytes();
+		return handle.Get<Node7Leaf>().GetBytes(arena);
 	case NType::NODE_15_LEAF:
-		return NodePtr::Ref<Node15Leaf>(art, leaf_ptr, type).GetBytes();
+		return handle.Get<Node15Leaf>().GetBytes(arena);
 	case NType::NODE_256_LEAF:
-		return NodePtr::Ref<Node256Leaf>(art, leaf_ptr, type).GetBytes(arena);
+		return handle.Get<Node256Leaf>().GetBytes(arena);
 	default:
 		throw InternalException("invalid node type for ARTMerger::GetBytes: %s", EnumUtil::ToString(type));
 	}
@@ -172,15 +173,16 @@ void ARTMerger::MergeLeaves(NodePtr &left_ptr, NodeEntry &entry) {
 
 NodeChildren ARTMerger::ExtractChildren(NodePtr &node_ptr) {
 	const auto type = node_ptr.GetType();
+	ConstNodeHandle handle(art, node_ptr);
 	switch (type) {
 	case NType::NODE_4:
-		return NodePtr::Ref<Node4>(art, node_ptr, type).ExtractChildren(arena);
+		return handle.Get<Node4>().ExtractChildren(arena);
 	case NType::NODE_16:
-		return NodePtr::Ref<Node16>(art, node_ptr, type).ExtractChildren(arena);
+		return handle.Get<Node16>().ExtractChildren(arena);
 	case NType::NODE_48:
-		return NodePtr::Ref<Node48>(art, node_ptr, type).ExtractChildren(arena);
+		return handle.Get<Node48>().ExtractChildren(arena);
 	case NType::NODE_256:
-		return NodePtr::Ref<Node256>(art, node_ptr, type).ExtractChildren(arena);
+		return handle.Get<Node256>().ExtractChildren(arena);
 	default:
 		throw InternalException("invalid node type for ARTMerger::GetChildren: %s", EnumUtil::ToString(type));
 	}
@@ -236,9 +238,9 @@ void ARTMerger::MergeNodeAndPrefix(NodePtr &node_ptr, NodePtr &prefix_ptr, const
 	D_ASSERT(node_ptr.IsInternalNode());
 	D_ASSERT(prefix_ptr.GetType() == NType::PREFIX);
 
-	const auto byte = Prefix::GetByte(art, prefix_ptr, pos);
+	const auto byte = ConstPrefixHandle(art, prefix_ptr).GetByte(pos);
 	// Reduce the prefix to the bytes after pos.
-	Prefix::Reduce(art, prefix_ptr, pos);
+	PrefixHandle::Reduce(art, prefix_ptr, pos);
 
 	{
 		// Get the child at the prefix byte, or nullptr, if there is no child.
@@ -281,18 +283,31 @@ void ARTMerger::MergePrefixes(NodePtr &left_ptr, NodeEntry &entry) {
 	// the prefixes are the same. That means, we only need to keep
 	// one of them around.
 
-	Prefix l_prefix(art, left_ptr, true);
-	Prefix r_prefix(art, entry.right_ptr, true);
-	const auto count = art.PrefixCount();
-
-	// Find a byte at pos where the prefixes differ.
-	// If they match up to max_count, then pos stays invalid.
-	const auto max_count = MinValue(l_prefix.data[count], r_prefix.data[count]);
+	uint8_t l_count;
+	uint8_t r_count;
+	uint8_t max_count;
 	optional_idx pos;
-	for (idx_t i = 0; i < max_count; i++) {
-		if (l_prefix.data[i] != r_prefix.data[i]) {
-			pos = i;
-			break;
+	uint8_t l_byte = 0;
+	uint8_t r_byte = 0;
+	NodePtr r_child_ptr;
+	{
+		// Release the pins before Split, Reduce, or FreeNode change the prefixes.
+		ConstPrefixHandle l_prefix(art, left_ptr);
+		ConstPrefixHandle r_prefix(art, entry.right_ptr);
+		l_count = l_prefix.GetCount(art);
+		r_count = r_prefix.GetCount(art);
+		r_child_ptr = r_prefix.Child(art);
+
+		// Find a byte at pos where the prefixes differ.
+		// If they match up to max_count, then pos stays invalid.
+		max_count = MinValue(l_count, r_count);
+		for (idx_t i = 0; i < max_count; i++) {
+			if (l_prefix.GetByte(i) != r_prefix.GetByte(i)) {
+				pos = i;
+				l_byte = l_prefix.GetByte(i);
+				r_byte = r_prefix.GetByte(i);
+				break;
+			}
 		}
 	}
 
@@ -302,14 +317,12 @@ void ARTMerger::MergePrefixes(NodePtr &left_ptr, NodeEntry &entry) {
 		// Then, we insert both remainders into a new Node4.
 		// Then, we are done.
 		const auto split_pos = UnsafeNumericCast<uint8_t>(pos.GetIndex());
-		const auto l_byte = Prefix::GetByte(art, left_ptr, split_pos);
-		const auto r_byte = Prefix::GetByte(art, entry.right_ptr, split_pos);
 
 		// Split and reduce.
 		NodePtr branching_node4_ptr;
 		Node4::New(art, branching_node4_ptr);
 		auto l_child_ptr = PrefixHandle::Split(art, left_ptr, branching_node4_ptr, split_pos);
-		Prefix::Reduce(art, entry.right_ptr, split_pos);
+		PrefixHandle::Reduce(art, entry.right_ptr, split_pos);
 
 		Node4::InsertChild(art, branching_node4_ptr, l_byte, l_child_ptr);
 		Node4::InsertChild(art, branching_node4_ptr, r_byte, entry.right_ptr);
@@ -317,22 +330,21 @@ void ARTMerger::MergePrefixes(NodePtr &left_ptr, NodeEntry &entry) {
 		return;
 	}
 
-	if (l_prefix.data[count] == r_prefix.data[count]) {
+	if (l_count == r_count) {
 		// The prefixes match.
 		// Free the right prefix, but keep the reference to its child alive.
 		// Then, iterate on the left and right (reduced) child.
-		auto r_child_ptr = *r_prefix.child_slot;
 		NodePtr::FreeNode(art, entry.right_ptr);
 		entry.right_ptr = r_child_ptr;
 
-		auto depth = entry.depth + l_prefix.data[count];
+		auto depth = entry.depth + l_count;
 		auto l_child_ptr_handle = NodePtrHandle::PrefixChild(art, NodeHandle(art, left_ptr));
 		Emplace(l_child_ptr_handle.Get(), left_ptr, 0, entry.right_ptr, entry.status, depth);
 		return;
 	}
 
 	// max_count indexes the byte after the exhausted prefix in a child node.
-	if (r_prefix.data[count] == max_count) {
+	if (r_count == max_count) {
 		// We exhausted the right prefix.
 		// Ensure that we continue merging into left.
 		swap(left_ptr, entry.right_ptr);

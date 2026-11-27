@@ -47,7 +47,7 @@ public:
 
 	//! Returns a pointer to the bytes in the leaf.
 	//! The pointer data is valid as long as the arena is valid.
-	array_ptr<uint8_t> GetBytes(ArenaAllocator &arena);
+	array_ptr<uint8_t> GetBytes(ArenaAllocator &arena) const;
 
 	//! Get the first byte greater or equal to the byte.
 	//! Returns true, if such a byte exists, else false.

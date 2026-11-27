@@ -53,14 +53,13 @@ bool Node256Leaf::HasByte(const uint8_t byte) const {
 	return ValidityMask::RowIsValid(mask[entry_idx], idx_in_entry);
 }
 
-array_ptr<uint8_t> Node256Leaf::GetBytes(ArenaAllocator &arena) {
+array_ptr<uint8_t> Node256Leaf::GetBytes(ArenaAllocator &arena) const {
 	auto mem = arena.AllocateAligned(sizeof(uint8_t) * count);
 	array_ptr<uint8_t> bytes(mem, count);
 
-	ValidityMask v_mask(&mask[0], Node256::CAPACITY);
 	uint16_t ptr_idx = 0;
 	for (uint16_t i = 0; i < CAPACITY; i++) {
-		if (v_mask.RowIsValid(i)) {
+		if (HasByte(UnsafeNumericCast<uint8_t>(i))) {
 			bytes[ptr_idx++] = UnsafeNumericCast<uint8_t>(i);
 		}
 	}

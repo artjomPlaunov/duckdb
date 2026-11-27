@@ -55,9 +55,14 @@ public:
 	}
 
 	//! Returns a pointer to the bytes in the leaf.
-	//! The pointer's data is valid as long as the leaf is valid.
-	array_ptr<uint8_t> GetBytes() {
-		return array_ptr<uint8_t>(key, count);
+	//! The pointer data is valid as long as the arena is valid.
+	array_ptr<uint8_t> GetBytes(ArenaAllocator &arena) const {
+		auto mem = arena.AllocateAligned(sizeof(uint8_t) * count);
+		array_ptr<uint8_t> bytes(mem, count);
+		for (uint8_t i = 0; i < count; i++) {
+			bytes[i] = key[i];
+		}
+		return bytes;
 	}
 
 	//! Get the first byte greater than or equal to the byte.

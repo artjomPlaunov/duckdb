@@ -13,7 +13,7 @@
 
 namespace duckdb {
 
-//! Prefix is a wrapper class to access a prefix.
+//! Prefix holds the layout constants of a prefix node.
 //! The prefix contains up to the ART's prefix size bytes and an additional byte for the count.
 //! It also contains a child NodePtr.
 class Prefix {
@@ -28,27 +28,5 @@ public:
 
 public:
 	Prefix() = delete;
-	Prefix(const ART &art, const NodePtr node_ptr, const bool is_mutable = false, const bool set_in_memory = false);
-	Prefix(FixedSizeAllocator &allocator, const NodePtr node_ptr, const idx_t count);
-
-	data_ptr_t data;
-	NodePtr *child_slot;
-	bool in_memory;
-
-public:
-	static uint8_t GetByte(const ART &art, const NodePtr &node_ptr, const uint8_t pos);
-
-public:
-	//! Removes up to pos bytes from the prefix.
-	//! Shifts all subsequent bytes by pos. Frees empty nodes.
-	static void Reduce(ART &art, NodePtr &node_ptr, const idx_t pos);
-
-private:
-	static Prefix NewInternal(ART &art, NodePtr &node_ptr, const data_ptr_t data, const uint8_t count,
-	                          const idx_t offset);
-
-	Prefix Append(ART &art, const uint8_t byte);
-	void Append(ART &art, NodePtr other_ptr);
-	Prefix TransformToDeprecatedAppend(ART &art, FixedSizeAllocator &allocator, uint8_t byte);
 };
 } // namespace duckdb

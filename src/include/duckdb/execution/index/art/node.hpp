@@ -114,8 +114,6 @@ struct ToStringOptions {
 //! The NodePtr is the pointer class of the ART index.
 //! It inherits from the IndexPointer, and adds ART-specific functionality.
 class NodePtr : public IndexPointer {
-	friend class Prefix;
-
 public:
 	//! A gate sets the leftmost bit of the metadata, binary: 1000-0000.
 	static constexpr uint8_t AND_GATE = 0x80;

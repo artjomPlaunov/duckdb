@@ -15,7 +15,6 @@ add_library_unity(
   node256.cpp
   node256_leaf.cpp
   node48.cpp
-  prefix.cpp
   prefix_handle.cpp
   const_prefix_handle.cpp)
 
