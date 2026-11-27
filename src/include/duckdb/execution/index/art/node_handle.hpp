@@ -89,7 +89,7 @@ private:
 //! NodePtrHandle refers to a mutable NodePtr and owns the pin on the node storing it.
 //! NodeHandle pins the node that a NodePtr points to; NodePtrHandle pins the node that contains the NodePtr.
 //! Use it to pass a NodePtr to a callee that may free the node storing it, as in Delete: the callee releases
-//! the pin before that free. ARTMerger uses it to pin the location of a NodePtr that its stack stores by value.
+//! the pin before that free. ARTMerger uses it to pin the node that contains the left NodePtr of a merge step.
 //! Otherwise, keep a NodeHandle in scope and use a NodePtr reference, as Insert does.
 //! Only ARTOperator and ARTMerger can create an unpinned NodePtrHandle, for a NodePtr that no node stores,
 //! e.g., the ART root.

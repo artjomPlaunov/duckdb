@@ -236,8 +236,8 @@ void ARTMerger::MergeNodeAndPrefix(NodePtr &node_ptr, NodePtr &prefix_ptr, const
 	D_ASSERT(node_ptr.IsInternalNode());
 	D_ASSERT(prefix_ptr.GetType() == NType::PREFIX);
 
-	// Get the prefix byte at pos, then reduce the prefix to the bytes after pos.
 	const auto byte = Prefix::GetByte(art, prefix_ptr, pos);
+	// Reduce the prefix to the bytes after pos.
 	Prefix::Reduce(art, prefix_ptr, pos);
 
 	{

@@ -215,12 +215,16 @@ CREATE UNIQUE INDEX idx_unique_violation ON unique_violation(k);
 <REGEX>:Constraint Error.*Data contains duplicates on indexed column.*
 
 # Multi-threaded build: thread-local ARTs are merged into the global ART.
+# verify_parallelism makes the sort emit partitions of 2048 rows, which the threads take in turns.
 statement ok
 SET threads=4;
 
 statement ok
-CREATE TABLE parallel AS SELECT (hash(r) % 50000)::BIGINT AS k, 'p' || repeat('q', 30) || (hash(r) % 3000)::VARCHAR AS s
-FROM range(500000) t(r);
+PRAGMA verify_parallelism;
+
+statement ok
+CREATE TABLE parallel AS SELECT (r % 5000)::BIGINT AS k, 'p' || repeat('q', 30) || (r % 250)::VARCHAR AS s
+FROM range(50000) t(r);
 
 statement ok
 CREATE INDEX idx_parallel_k ON parallel(k);
@@ -233,38 +237,49 @@ EXPLAIN ANALYZE SELECT k FROM parallel WHERE k = 42;
 ----
 analyzed_plan	<REGEX>:.*Type: Index Scan.*
 
-loop i 0 100
+query II
+EXPLAIN ANALYZE SELECT s FROM parallel WHERE s = 'p' || repeat('q', 30) || '42';
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+# Each key has 10 rows; ({i} * 2048) // 10 is the key at the first row of partition {i}.
+loop i 0 25
 
 query I
-SELECT (SELECT count(*) FROM parallel WHERE k = {i} * 499) = (SELECT count(*) FROM parallel WHERE k + 0 = {i} * 499);
+SELECT count(*) FROM parallel WHERE k = ({i} * 2048) // 10;
 ----
-true
+10
 
 query I
-SELECT (SELECT count(*) FROM parallel WHERE s = 'p' || repeat('q', 30) || ({i} * 29)::VARCHAR) =
-       (SELECT count(*) FROM parallel WHERE s || '' = 'p' || repeat('q', 30) || ({i} * 29)::VARCHAR);
+SELECT count(*) FROM parallel WHERE s = 'p' || repeat('q', 30) || ({i} * 10)::VARCHAR;
 ----
-true
+200
 
 endloop
 
+query I
+SELECT count(*) FROM parallel WHERE k = 5000;
+----
+0
+
 statement ok
-CREATE TABLE parallel_unique AS SELECT r::BIGINT AS k FROM range(500000) t(r);
+CREATE TABLE parallel_unique AS SELECT r::BIGINT AS k FROM range(50000) t(r);
 
 statement ok
 CREATE UNIQUE INDEX idx_parallel_unique ON parallel_unique(k);
 
-loop i 0 50
+loop i 1 25
 
 query I
-SELECT count(*) FROM parallel_unique WHERE k = {i} * 9973;
+SELECT count(*) FROM parallel_unique WHERE k = {i} * 2048 - 1;
 ----
 1
 
 endloop
 
+# The duplicate rows are the last row of one partition and the first row of the next.
 statement ok
-CREATE TABLE parallel_violation AS SELECT r::BIGINT AS k FROM range(500000) t(r) UNION ALL SELECT 250000;
+CREATE TABLE parallel_violation AS SELECT r::BIGINT AS k FROM range(50000) t(r) UNION ALL SELECT 24575;
 
 statement error
 CREATE UNIQUE INDEX idx_parallel_violation ON parallel_violation(k);

@@ -26,7 +26,7 @@ public:
 	}
 
 public:
-	//! Init the merge by setting the initial nodes. left_ptr is the root of the ART merged into.
+	//! Init the merge by setting the initial nodes.
 	void Init(NodePtr &left_ptr, const NodePtr right_ptr);
 	//! Merge until (1) triggering constraint violation or (2) all nodes have been processed.
 	ARTConflictType Merge();
@@ -65,7 +65,7 @@ private:
 	// When pushing anything on the stack, we ensure that:
 	// - if left is LEAF_INLINED, then right is also LEAF_INLINED.
 	// - if left is PREFIX, then right is also PREFIX (except for PREFIX + LEAF_INLINED).
-	// left_ptr is the NodePtr at the location (left_parent_ptr, left_byte), pinned by the caller.
+	// left_parent_ptr is the node that contains left_ptr. The caller keeps it pinned.
 	void Emplace(NodePtr &left_ptr, const NodePtr left_parent_ptr, const uint8_t left_byte, NodePtr right_ptr,
 	             const GateStatus parent_status, const idx_t depth);
 	//! Pins the location of the entry's left NodePtr.
