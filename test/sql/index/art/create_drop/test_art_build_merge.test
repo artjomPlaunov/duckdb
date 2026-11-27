@@ -1,0 +1,272 @@
+# name: test/sql/index/art/create_drop/test_art_build_merge.test
+# description: Test the merges of CREATE INDEX, which builds an ART per chunk of sorted keys and merges it
+# group: [create_drop]
+
+statement ok
+SET threads=1;
+
+# Merging nodes grows a Node4 into a Node16, Node48 and Node256 across chunks.
+statement ok
+CREATE TABLE growth AS SELECT ((r // 700) * 4294967296 + r % 700)::BIGINT AS k FROM range(140000) t(r);
+
+statement ok
+CREATE UNIQUE INDEX idx_growth ON growth(k);
+
+query II
+EXPLAIN ANALYZE SELECT k FROM growth WHERE k = 4294967296;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+loop i 0 200
+
+query I
+SELECT count(*) FROM growth WHERE k = {i} * 4294967296;
+----
+1
+
+query I
+SELECT count(*) FROM growth WHERE k = {i} * 4294967296 + 699;
+----
+1
+
+query I
+SELECT count(*) FROM growth WHERE k = {i} * 4294967296 + 700;
+----
+0
+
+endloop
+
+# Prefix chains longer than one prefix node. Chunk-aligned regions that
+# split a prefix (also at position 0), contain each other, match, or hit a node.
+statement ok
+CREATE TABLE prefixes AS SELECT CASE
+	WHEN r < 2048 THEN 'a' || repeat('x', 40) || 'a' || lpad(r::VARCHAR, 6, '0')
+	WHEN r < 4096 THEN 'a' || repeat('x', 40) || 'b' || lpad(r::VARCHAR, 6, '0')
+	WHEN r < 8192 THEN 'a' || repeat('x', 40) || 'c' || lpad(r::VARCHAR, 6, '0')
+	WHEN r < 20000 THEN 'b' || repeat('y', 50) || lpad(r::VARCHAR, 6, '0')
+	ELSE 'c' || lpad(r::VARCHAR, 6, '0') END AS k
+FROM range(25000) t(r);
+
+statement ok
+CREATE UNIQUE INDEX idx_prefixes ON prefixes(k);
+
+query II
+EXPLAIN ANALYZE SELECT k FROM prefixes WHERE k = 'c020000';
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'a' || '000000';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'a' || '001000';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'a' || '002047';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'b' || '002048';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'b' || '003000';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'b' || '004095';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'c' || '004096';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'c' || '006000';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'c' || '008191';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'b' || repeat('y', 50) || '008192';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'b' || repeat('y', 50) || '014000';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'b' || repeat('y', 50) || '019999';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'c' || '020000';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'c' || '024999';
+----
+1
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40) || 'b' || '002047';
+----
+0
+
+query I
+SELECT count(*) FROM prefixes WHERE k = 'a' || repeat('x', 40);
+----
+0
+
+# Duplicates in a non-unique index across chunks: two inlined leaves.
+statement ok
+CREATE TABLE dup2 AS SELECT ((r + 1) // 2)::INTEGER AS k FROM range(10000) t(r);
+
+statement ok
+CREATE INDEX idx_dup2 ON dup2(k);
+
+# A nested leaf and an inlined leaf, in both orders.
+statement ok
+CREATE TABLE dup3 AS SELECT (r // 3)::INTEGER AS k FROM range(10000) t(r);
+
+statement ok
+CREATE INDEX idx_dup3 ON dup3(k);
+
+# Nested leaves with nodes and prefixes on both sides.
+statement ok
+CREATE TABLE dup_many AS
+SELECT (r // 1000)::INTEGER AS k FROM range(20000) t(r)
+UNION ALL
+SELECT (r % 20)::INTEGER FROM range(100000) t(r);
+
+statement ok
+CREATE INDEX idx_dup_many ON dup_many(k);
+
+query II
+EXPLAIN ANALYZE SELECT k FROM dup3 WHERE k = 682;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+loop i 1023 1026
+
+query I
+SELECT count(*) FROM dup2 WHERE k = {i};
+----
+2
+
+endloop
+
+loop i 681 684
+
+query I
+SELECT count(*) FROM dup3 WHERE k = {i};
+----
+3
+
+endloop
+
+loop i 1364 1367
+
+query I
+SELECT count(*) FROM dup3 WHERE k = {i};
+----
+3
+
+endloop
+
+loop i 0 20
+
+query I
+SELECT count(*) FROM dup_many WHERE k = {i};
+----
+6000
+
+endloop
+
+query I
+SELECT count(*) FROM dup_many WHERE k = 20;
+----
+0
+
+# A duplicate across two chunks violates a unique index during the merge.
+statement ok
+CREATE TABLE unique_violation AS SELECT r::INTEGER AS k FROM range(5000) t(r) UNION ALL SELECT 2047;
+
+statement error
+CREATE UNIQUE INDEX idx_unique_violation ON unique_violation(k);
+----
+<REGEX>:Constraint Error.*Data contains duplicates on indexed column.*
+
+# Multi-threaded build: thread-local ARTs are merged into the global ART.
+statement ok
+SET threads=4;
+
+statement ok
+CREATE TABLE parallel AS SELECT (hash(r) % 50000)::BIGINT AS k, 'p' || repeat('q', 30) || (hash(r) % 3000)::VARCHAR AS s
+FROM range(500000) t(r);
+
+statement ok
+CREATE INDEX idx_parallel_k ON parallel(k);
+
+statement ok
+CREATE INDEX idx_parallel_s ON parallel(s);
+
+query II
+EXPLAIN ANALYZE SELECT k FROM parallel WHERE k = 42;
+----
+analyzed_plan	<REGEX>:.*Type: Index Scan.*
+
+loop i 0 100
+
+query I
+SELECT (SELECT count(*) FROM parallel WHERE k = {i} * 499) = (SELECT count(*) FROM parallel WHERE k + 0 = {i} * 499);
+----
+true
+
+query I
+SELECT (SELECT count(*) FROM parallel WHERE s = 'p' || repeat('q', 30) || ({i} * 29)::VARCHAR) =
+       (SELECT count(*) FROM parallel WHERE s || '' = 'p' || repeat('q', 30) || ({i} * 29)::VARCHAR);
+----
+true
+
+endloop
+
+statement ok
+CREATE TABLE parallel_unique AS SELECT r::BIGINT AS k FROM range(500000) t(r);
+
+statement ok
+CREATE UNIQUE INDEX idx_parallel_unique ON parallel_unique(k);
+
+loop i 0 50
+
+query I
+SELECT count(*) FROM parallel_unique WHERE k = {i} * 9973;
+----
+1
+
+endloop
+
+statement ok
+CREATE TABLE parallel_violation AS SELECT r::BIGINT AS k FROM range(500000) t(r) UNION ALL SELECT 250000;
+
+statement error
+CREATE UNIQUE INDEX idx_parallel_violation ON parallel_violation(k);
+----
+<REGEX>:Constraint Error.*Data contains duplicates on indexed column.*

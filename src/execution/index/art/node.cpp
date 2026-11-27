@@ -230,10 +230,6 @@ const unsafe_optional_ptr<NodePtr> NodePtr::GetChild(ART &art, const uint8_t byt
 	return GetChildInternal(art, *this, byte, false);
 }
 
-unsafe_optional_ptr<NodePtr> NodePtr::GetChildMutableUnsafe(ART &art, const uint8_t byte) const {
-	return GetChildInternal(art, *this, byte, false);
-}
-
 OptionalNodePtr NodePtr::GetChildNode(const ART &art, const uint8_t byte) const {
 	D_ASSERT(HasMetadata());
 	auto type = GetType();

@@ -1489,7 +1489,10 @@ bool ART::MergeIndexes(IndexLock &state, BoundIndex &source_index) {
 		ArenaAllocator arena(Allocator::Get(db));
 		ARTMerger merger(arena, *this);
 		merger.Init(root_ptr, other_art.root_ptr);
-		return merger.Merge() == ARTConflictType::NO_CONFLICT;
+		const auto conflict_type = merger.Merge();
+		// The merger moved or freed the nodes of the source ART.
+		other_art.root_ptr.Clear();
+		return conflict_type == ARTConflictType::NO_CONFLICT;
 	}
 
 	root_ptr = other_art.root_ptr;
