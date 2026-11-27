@@ -9,6 +9,8 @@
 #include "duckdb/catalog/catalog_entry/duck_table_entry.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/serializer/binary_serializer.hpp"
+#include "duckdb/common/serializer/memory_stream.hpp"
 #include "duckdb/parser/column_definition.hpp"
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
@@ -100,9 +102,30 @@ void DuckTransaction::PushAttach(AttachedDatabase &db) {
 	Store<CatalogEntry *>(&db, ptr);
 }
 
+//! Serializes the indexed column values that a delete entry stores after its previous ids
+static void SerializeIndexValues(const DeleteIndexValues &index_values, MemoryStream &stream) {
+	D_ASSERT(index_values.offset == 0);
+	BinarySerializer serializer(stream);
+	serializer.Begin();
+	serializer.WriteProperty(100, "column_ids", index_values.column_ids);
+	serializer.WriteObject(101, "values", [&](Serializer &object) { index_values.chunk.Serialize(object); });
+	serializer.End();
+}
+
 void DuckTransaction::PushWrite(UndoFlags type, DuckTableEntry &table_entry, RowVersionManager &info, idx_t vector_idx,
-                                idx_t base_row, const WrittenRows &written) {
-	auto alloc_size = DeleteInfo::GetAllocationSize(written.count, written.is_consecutive, written.previous_id_count);
+                                idx_t base_row, const WrittenRows &written,
+                                optional_ptr<const DeleteIndexValues> index_values) {
+	D_ASSERT(!index_values || type == UndoFlags::DELETE_TUPLE);
+	unique_ptr<MemoryStream> index_values_stream;
+	idx_t index_values_size = 0;
+	if (index_values) {
+		D_ASSERT(index_values->chunk.size() == written.count);
+		index_values_stream = make_uniq<MemoryStream>();
+		SerializeIndexValues(*index_values, *index_values_stream);
+		index_values_size = index_values_stream->GetPosition();
+	}
+	auto alloc_size = DeleteInfo::GetAllocationSize(written.count, written.is_consecutive, written.previous_id_count,
+	                                                index_values_size);
 
 	auto undo_entry = undo_buffer.CreateEntry(type, alloc_size);
 	auto delete_info = reinterpret_cast<DeleteInfo *>(undo_entry.GetDataMutable());
@@ -113,10 +136,14 @@ void DuckTransaction::PushWrite(UndoFlags type, DuckTableEntry &table_entry, Row
 	delete_info->base_row = base_row;
 	delete_info->is_consecutive = written.is_consecutive;
 	delete_info->previous_id_count = written.previous_id_count;
+	delete_info->index_values_size = index_values_size;
 	if (!written.is_consecutive) {
 		std::copy_n(written.rows, written.count, delete_info->GetRows());
 	}
 	std::copy_n(written.previous_ids, written.previous_id_count, delete_info->GetPreviousIds());
+	if (index_values_size > 0) {
+		memcpy(delete_info->GetIndexValues(), index_values_stream->GetData(), index_values_size);
+	}
 }
 
 void DuckTransaction::PushAppend(DuckTableEntry &table_entry, idx_t start_row, idx_t row_count) {

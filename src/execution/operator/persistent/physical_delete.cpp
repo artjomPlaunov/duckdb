@@ -12,6 +12,7 @@
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/table/delete_state.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
+#include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/local_storage.hpp"
 
@@ -99,8 +100,8 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &row_ids = chunk.data[row_id_index];
 	row_ids.Flatten();
 
-	// Fast path: no RETURNING and no unique indexes
-	if (!return_chunk && !g_state.has_unique_indexes) {
+	// Fast path: no RETURNING, no unique indexes and no indexed columns passed through
+	if (!return_chunk && !g_state.has_unique_indexes && return_columns.empty()) {
 		auto deleted = table.Delete(*l_state.delete_state, context.client, tableref, row_ids, chunk.size());
 		g_state.deleted_count.fetch_add(deleted);
 		return SinkResultType::NEED_MORE_INPUT;
@@ -151,6 +152,7 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 	// through the scan, so fetch them by row id instead.
 	const bool fetch_by_row_id = return_columns.empty();
 	DataChunk fetch_chunk;
+	vector<column_t> value_columns;
 	if (fetch_by_row_id) {
 		vector<StorageIndex> column_ids;
 		if (return_chunk) {
@@ -158,7 +160,7 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 				column_ids.emplace_back(i);
 			}
 		} else {
-			auto indexed_columns = table.GetDataTableInfo()->GetIndexes().GetUniqueIndexColumns();
+			auto indexed_columns = table.GetDataTableInfo()->GetIndexes().GetIndexedColumns();
 			vector<column_t> sorted_columns(indexed_columns.begin(), indexed_columns.end());
 			std::sort(sorted_columns.begin(), sorted_columns.end());
 			for (auto col : sorted_columns) {
@@ -188,6 +190,7 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 		for (idx_t i = 0; i < table.ColumnCount(); i++) {
 			if (fetch_idx + 1 < column_ids.size() && column_ids[fetch_idx].GetPrimaryIndex() == i) {
 				l_state.delete_chunk.data[i].Reference(fetch_chunk.data[fetch_idx++]);
+				value_columns.push_back(i);
 			} else {
 				l_state.delete_chunk.data[i].Reference(Value(types[i]), count_t(delete_count));
 			}
@@ -201,6 +204,7 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 			if (return_columns[i] != DConstants::INVALID_INDEX) {
 				// Column was passed through from the scan
 				l_state.delete_chunk.data[i].Reference(chunk.data[return_columns[i]]);
+				value_columns.push_back(i);
 			} else {
 				// Column not in scan (sparse mapping for index-only case) - use NULL placeholder
 				l_state.delete_chunk.data[i].Reference(Value(types[i]), count_t(chunk.size()));
@@ -225,7 +229,9 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 		storage->AppendToDeleteIndexes(delete_row_ids, l_state.delete_chunk);
 	}
 
-	auto deleted = table.Delete(*l_state.delete_state, context.client, tableref, delete_row_ids, delete_count);
+	DeleteIndexValues index_values(l_state.delete_chunk, std::move(value_columns));
+	auto deleted =
+	    table.Delete(*l_state.delete_state, context.client, tableref, delete_row_ids, delete_count, &index_values);
 	g_state.deleted_count.fetch_add(deleted);
 
 	// Collect RETURNING rows per-thread; merge into global in Combine()

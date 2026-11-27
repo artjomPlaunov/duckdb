@@ -159,14 +159,18 @@ public:
 	                  optional_ptr<StorageCommitState> commit_state);
 	bool IsPersistent() const;
 
-	//! Removes the rows from the indexes added before the bound.
+	//! Removes the rows from the indexes added before the bound, with the keys from the given indexed column values if
+	//! they cover every such index, else from the fetched rows.
 	void RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes, Vector &row_identifiers, idx_t count,
 	                       IndexRemovalType removal_type, optional_idx active_checkpoint = optional_idx(),
-	                       VisibilityBound bound = VisibilityBound::IncludingUncommitted());
+	                       VisibilityBound bound = VisibilityBound::IncludingUncommitted(),
+	                       optional_ptr<const DeleteIndexValues> index_values = nullptr);
 
-	//! Delete the given rows - optionally collects the ids of the rows that were deleted (excluding duplicates)
+	//! Delete the given rows - optionally collects the ids of the rows that were deleted (excluding duplicates), and
+	//! stores the indexed column values of the deleted rows in their undo entries if given
 	idx_t Delete(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids, idx_t count,
-	             optional_ptr<DeletedRowIds> deleted_ids = nullptr);
+	             optional_ptr<DeletedRowIds> deleted_ids = nullptr,
+	             optional_ptr<const DeleteIndexValues> index_values = nullptr);
 	void Update(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids,
 	            const vector<PhysicalIndex> &column_ids, DataChunk &updates);
 	void UpdateColumn(TransactionData transaction, DuckTableEntry &table_entry, Vector &row_ids,

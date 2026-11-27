@@ -24,6 +24,7 @@ class ColumnList;
 class ColumnDataCollection;
 class ColumnDefinition;
 class DataTable;
+struct DeleteIndexValues;
 class DataChunk;
 class DistinctStatistics;
 class DuckTransaction;
@@ -166,9 +167,10 @@ public:
 
 	unique_ptr<TableDeleteState> InitializeDelete(TableCatalogEntry &table, ClientContext &context,
 	                                              const vector<unique_ptr<BoundConstraint>> &bound_constraints);
-	//! Delete the entries with the specified row identifier from the table
+	//! Delete the entries with the specified row identifier from the table. The undo entries of committed rows store
+	//! the values of the indexed columns if index_values sets all of them.
 	idx_t Delete(TableDeleteState &state, ClientContext &context, DuckTableEntry &table_entry, Vector &row_ids,
-	             idx_t count);
+	             idx_t count, optional_ptr<const DeleteIndexValues> index_values = nullptr);
 
 	unique_ptr<TableUpdateState> InitializeUpdate(TableCatalogEntry &table, ClientContext &context,
 	                                              const vector<unique_ptr<BoundConstraint>> &bound_constraints);
@@ -213,9 +215,11 @@ public:
 	//! Merge a row group collection directly into this table - appending it to the end of the table without copying
 	void MergeStorage(RowGroupCollection &data, optional_ptr<StorageCommitState> commit_state);
 
-	//! Remove the row identifiers from the indexes of the table added before the bound
+	//! Remove the row identifiers from the indexes of the table added before the bound, with the keys from the
+	//! given indexed column values if they cover every index, else from the fetched rows
 	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-	                       IndexRemovalType removal_type, optional_idx checkpoint_id, VisibilityBound bound);
+	                       IndexRemovalType removal_type, optional_idx checkpoint_id, VisibilityBound bound,
+	                       optional_ptr<const DeleteIndexValues> index_values = nullptr);
 
 	void SetAsMainTable() {
 		this->version = DataTableVersion::MAIN_TABLE;

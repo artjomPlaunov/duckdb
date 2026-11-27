@@ -1,0 +1,94 @@
+# name: test/sql/index/art/insert_update_delete/test_art_delete_stored_keys_checkpoint.test_slow
+# description: Deletes commit their stored keys into the checkpoint deltas while a checkpoint runs
+# group: [insert_update_delete]
+
+require skip_reload
+
+statement ok
+SET checkpoint_threshold = '1TB';
+
+statement ok
+ATTACH '{TEST_DIR}/delete_stored_keys_checkpoint.db' AS db;
+
+statement ok
+CREATE TABLE db.t (id INTEGER PRIMARY KEY, a INTEGER, l INTEGER[]);
+
+statement ok
+CREATE INDEX t_a ON db.t (a);
+
+statement ok
+INSERT INTO db.t SELECT i, i % 100, [i] FROM range(100000) t(i);
+
+statement ok
+CHECKPOINT db;
+
+statement ok
+SET debug_checkpoint_sleep_ms = 1500;
+
+concurrentloop threadid 0 2
+
+onlyif threadid=0
+statement ok
+CHECKPOINT db;
+
+onlyif threadid=1
+sleep 400 millisecond
+
+onlyif threadid=1
+statement ok
+DELETE FROM db.t WHERE id < 1000;
+
+onlyif threadid=1
+statement ok
+UPDATE db.t SET l = [0] WHERE id BETWEEN 1000 AND 1999;
+
+onlyif threadid=1
+statement ok
+UPDATE db.t SET a = -1 WHERE id BETWEEN 2000 AND 2999;
+
+endloop
+
+statement ok
+SET debug_checkpoint_sleep_ms = 0;
+
+query II
+SELECT count(*), count(DISTINCT id) FROM db.t;
+----
+99000	99000
+
+query I
+SELECT count(*) FROM db.t WHERE a = -1;
+----
+1000
+
+query I
+SELECT count(*) FROM db.t WHERE a = 5;
+----
+980
+
+statement ok
+INSERT INTO db.t SELECT i, -2, [] FROM range(1000) t(i);
+
+statement error
+INSERT INTO db.t VALUES (1500, 0, []);
+----
+<REGEX>:Constraint Error.*Duplicate key "id: 1500".*
+
+statement ok
+CHECKPOINT db;
+
+statement ok
+DETACH db;
+
+statement ok
+ATTACH '{TEST_DIR}/delete_stored_keys_checkpoint.db' AS db;
+
+query I
+SELECT count(*) FROM db.t WHERE a = -2;
+----
+1000
+
+query I
+SELECT count(*) FROM db.t WHERE a = 5;
+----
+980

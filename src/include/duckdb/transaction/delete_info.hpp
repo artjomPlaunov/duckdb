@@ -10,9 +10,11 @@
 
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/helper.hpp"
+#include "duckdb/common/vector.hpp"
 #include "duckdb/common/vector_size.hpp"
 
 namespace duckdb {
+class DataChunk;
 class DuckTableEntry;
 class RowVersionManager;
 
@@ -28,6 +30,8 @@ struct DeleteInfo {
 	bool is_consecutive;
 	//! How many of the ids that the rows held before are stored after the rows: 1 (shared) or count
 	idx_t previous_id_count;
+	//! The size of the indexed column values of the rows, stored after the previous ids (0 if not stored)
+	idx_t index_values_size;
 
 	uint16_t *GetRows() {
 		if (is_consecutive) {
@@ -50,10 +54,15 @@ struct DeleteInfo {
 		auto rows_end = reinterpret_cast<uintptr_t>(rows) + (is_consecutive ? 0 : count * sizeof(uint16_t));
 		return reinterpret_cast<transaction_t *>(AlignValue<uintptr_t, sizeof(transaction_t)>(rows_end));
 	}
+	//! The serialized indexed column values (see DeleteIndexValues) are stored after the previous ids
+	data_ptr_t GetIndexValues() {
+		return reinterpret_cast<data_ptr_t>(GetPreviousIds() + previous_id_count);
+	}
 	//! The size of the entry (an upper bound, as the rows start before the end of the struct)
-	static idx_t GetAllocationSize(idx_t count, bool is_consecutive, idx_t previous_id_count) {
+	static idx_t GetAllocationSize(idx_t count, bool is_consecutive, idx_t previous_id_count,
+	                               idx_t index_values_size = 0) {
 		return sizeof(DeleteInfo) + (is_consecutive ? 0 : count * sizeof(uint16_t)) +
-		       (previous_id_count + 1) * sizeof(transaction_t);
+		       (previous_id_count + 1) * sizeof(transaction_t) + index_values_size;
 	}
 
 private:
@@ -75,6 +84,19 @@ struct WrittenRows {
 	const uint16_t *GetStoredRows() const {
 		return is_consecutive ? nullptr : rows;
 	}
+};
+
+//! The values of the indexed columns of the rows a delete is given, in table layout
+struct DeleteIndexValues {
+	DeleteIndexValues(DataChunk &chunk, vector<column_t> column_ids, idx_t offset = 0)
+	    : chunk(chunk), column_ids(std::move(column_ids)), offset(offset) {
+	}
+
+	DataChunk &chunk;
+	//! The indexed columns that are set in the chunk, sorted
+	vector<column_t> column_ids;
+	//! The row of the chunk that holds the values of the first row id
+	idx_t offset;
 };
 
 } // namespace duckdb

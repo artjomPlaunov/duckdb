@@ -108,7 +108,27 @@ bool IndexDataRemover::PushDelete(DeleteInfo &info) {
 			row_numbers[count++] = UnsafeNumericCast<int64_t>(info.base_row + rows[i]);
 		}
 	}
-	Flush(version_table, row_numbers, count);
+	if (info.index_values_size == 0) {
+		Flush(version_table, row_numbers, count, nullptr);
+		return removal_type == IndexRemovalType::MAIN_INDEX;
+	}
+	// the delete stored the indexed column values of the rows
+	MemoryStream source(info.GetIndexValues(), info.index_values_size);
+	BinaryDeserializer deserializer(source);
+	deserializer.Begin();
+	auto column_ids = deserializer.ReadProperty<vector<column_t>>(100, "column_ids");
+	DataChunk stored_values;
+	deserializer.ReadObject(101, "values", [&](Deserializer &object) { stored_values.Deserialize(object); });
+	deserializer.End();
+	D_ASSERT(stored_values.size() == count);
+
+	DataChunk table_values;
+	table_values.InitializeEmpty(version_table.GetTypes());
+	for (idx_t i = 0; i < column_ids.size(); i++) {
+		table_values.data[column_ids[i]].Reference(stored_values.data[i]);
+	}
+	DeleteIndexValues index_values(table_values, std::move(column_ids));
+	Flush(version_table, row_numbers, count, &index_values);
 	return removal_type == IndexRemovalType::MAIN_INDEX;
 }
 
@@ -121,7 +141,8 @@ void IndexDataRemover::Verify() {
 #endif
 }
 
-void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) {
+void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count,
+                             optional_ptr<const DeleteIndexValues> index_values) {
 	if (count == 0) {
 		return;
 	}
@@ -138,7 +159,7 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 	// data, hence the transaction cannot be guaranteed.
 	try {
 		table.RemoveFromIndexes(context, row_identifiers, count, removal_type, checkpoint_id,
-		                        VisibilityBound::Before(transaction.commit_id));
+		                        VisibilityBound::Before(transaction.commit_id), index_values);
 	} catch (std::exception &ex) {
 		throw FatalException(ErrorData(ex).Message());
 	} catch (...) {

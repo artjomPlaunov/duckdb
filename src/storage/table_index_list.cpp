@@ -616,19 +616,6 @@ vector<unordered_set<column_t>> TableIndexList::GetConflictTargetColumns(const C
 	return result;
 }
 
-unordered_set<column_t> TableIndexList::GetUniqueIndexColumns() const {
-	annotated_lock_guard lock(index_entries_lock);
-	unordered_set<column_t> result;
-	for (const auto &entry : index_entries) {
-		auto index_info = entry->GetStorageInfo();
-		if (!index_info.is_unique) {
-			continue;
-		}
-		result.insert(index_info.column_set.begin(), index_info.column_set.end());
-	}
-	return result;
-}
-
 unique_ptr<IndexStorageInfo> TableIndexList::SerializeToWAL(idx_t index_oid, const StorageVersion version) {
 	annotated_lock_guard lock(index_entries_lock);
 	for (const auto &entry : index_entries) {

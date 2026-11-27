@@ -142,8 +142,6 @@ public:
 	unordered_set<column_t> GetIndexedColumns(VisibilityBound bound = VisibilityBound::IncludingUncommitted()) const;
 	//! Returns the column sets of unique indexes matching the conflict target.
 	vector<unordered_set<column_t>> GetConflictTargetColumns(const ConflictInfo &conflict_info) const;
-	//! Get the combined column ids of the unique indexes.
-	unordered_set<column_t> GetUniqueIndexColumns() const;
 	//! Serializes the index matching the OID for the write-ahead log, if it exists.
 	unique_ptr<IndexStorageInfo> SerializeToWAL(idx_t index_oid, const StorageVersion version);
 

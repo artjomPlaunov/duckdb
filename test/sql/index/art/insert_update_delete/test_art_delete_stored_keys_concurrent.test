@@ -1,0 +1,125 @@
+# name: test/sql/index/art/insert_update_delete/test_art_delete_stored_keys_concurrent.test
+# description: Stored keys of deletes with schema changes, new indexes, older readers and checkpoints before the commit
+# group: [insert_update_delete]
+
+statement ok
+CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER, b VARCHAR);
+
+statement ok
+INSERT INTO t SELECT i, i % 100, 'b' || i FROM range(10000) t(i);
+
+# ADD COLUMN and ALTER TYPE of another column between a delete and its commit
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE id < 100;
+
+statement ok
+ALTER TABLE t ADD COLUMN c INTEGER;
+
+statement ok
+ALTER TABLE t ALTER b TYPE VARCHAR[] USING [b];
+
+statement ok
+COMMIT;
+
+statement ok
+INSERT INTO t SELECT i, 0, ['new'], 1 FROM range(100) t(i);
+
+statement error
+INSERT INTO t VALUES (5, 0, [], 0);
+----
+<REGEX>:Constraint Error.*Duplicate key "id: 5".*
+
+# CREATE INDEX after a delete in the same transaction
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE id BETWEEN 100 AND 199;
+
+statement ok
+CREATE INDEX t_a ON t (a);
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM t WHERE a = 50;
+----
+98
+
+# CREATE INDEX by another transaction between a delete and its commit
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM t WHERE id BETWEEN 200 AND 299;
+
+statement ok con2
+CREATE INDEX t_c ON t (c);
+
+statement ok con1
+COMMIT;
+
+query I
+SELECT count(*) FROM t WHERE c = 1;
+----
+100
+
+query I
+SELECT count(*) FROM t WHERE a = 50;
+----
+97
+
+statement ok
+INSERT INTO t SELECT i, 50, [], 2 FROM range(200, 300) t(i);
+
+query I
+SELECT count(*) FROM t WHERE a = 50;
+----
+197
+
+# an older reader keeps the deleted keys reachable until it ends
+statement ok con_old
+BEGIN;
+
+query I con_old
+SELECT count(*) FROM t WHERE id = 500;
+----
+1
+
+statement ok
+DELETE FROM t WHERE id BETWEEN 400 AND 599;
+
+query I con_old
+SELECT a FROM t WHERE id = 500;
+----
+0
+
+query I con_old
+SELECT count(*) FROM t WHERE a = 0 AND id BETWEEN 400 AND 599;
+----
+2
+
+query I
+SELECT count(*) FROM t WHERE id = 500;
+----
+0
+
+statement ok con_old
+COMMIT;
+
+statement ok
+INSERT INTO t SELECT i, 0, [], 3 FROM range(400, 600) t(i);
+
+query I
+SELECT count(*) FROM t WHERE c = 3 AND a = 0;
+----
+200
+
+query II
+SELECT count(*), count(DISTINCT id) FROM t;
+----
+9900	9900

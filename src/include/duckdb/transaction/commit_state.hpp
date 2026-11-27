@@ -29,6 +29,7 @@ class ClientContext;
 struct DataTableInfo;
 class DataTable;
 struct DeleteInfo;
+struct DeleteIndexValues;
 struct UpdateInfo;
 
 enum class CommitMode { COMMIT, REVERT_COMMIT };
@@ -81,7 +82,7 @@ public:
 	static IndexRemovalType GetCommitRemovalType(ActiveTransactionState transaction_state);
 
 private:
-	void Flush(DataTable &table, row_t *row_numbers, idx_t count);
+	void Flush(DataTable &table, row_t *row_numbers, idx_t count, optional_ptr<const DeleteIndexValues> index_values);
 
 private:
 	DuckTransaction &transaction;

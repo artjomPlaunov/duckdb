@@ -18,6 +18,7 @@
 #include "duckdb/storage/table/delete_state.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/storage/table/update_state.hpp"
+#include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
 
 namespace duckdb {
@@ -129,9 +130,9 @@ public:
 		if (index_update) {
 			delete_chunk.InitializeEmpty(table_types);
 
-			// Only unique indexes keep delete entries, so only their key columns are fetched; the rest are NULL.
-			auto unique_columns = table.GetDataTableInfo()->GetIndexes().GetUniqueIndexColumns();
-			vector<column_t> sorted_columns(unique_columns.begin(), unique_columns.end());
+			// The indexed columns are fetched for the delete indexes and the undo entries; the rest are NULL.
+			auto indexed_columns = table.GetDataTableInfo()->GetIndexes().GetIndexedColumns();
+			vector<column_t> sorted_columns(indexed_columns.begin(), indexed_columns.end());
 			std::sort(sorted_columns.begin(), sorted_columns.end());
 			vector<LogicalType> fetch_types;
 			fetch_column_ids.reserve(sorted_columns.size());
@@ -157,7 +158,7 @@ public:
 	DataChunk update_chunk;
 	DataChunk mock_chunk;
 	DataChunk delete_chunk;
-	//! Sorted unique-index key columns fetched into fetch_chunk for the delete indexes
+	//! Sorted indexed columns fetched into fetch_chunk for the delete indexes and the undo entries
 	vector<StorageIndex> fetch_column_ids;
 	DataChunk fetch_chunk;
 	DataChunk combined_chunk;
@@ -284,7 +285,7 @@ SinkResultType PhysicalUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &delete_chunk = index_update ? l_state.delete_chunk : l_state.mock_chunk;
 	delete_chunk.Reset();
 
-	// Without unique indexes the delete chunk stays empty, so no delete index entries are added.
+	// Without indexes the delete chunk stays empty, so no delete index entries are added.
 	if (index_update && !l_state.fetch_column_ids.empty()) {
 		auto &column_ids = l_state.fetch_column_ids;
 		auto &fetch_chunk = l_state.fetch_chunk;
@@ -306,15 +307,27 @@ SinkResultType PhysicalUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 		delete_chunk.CheckCardinality(update_count);
 	}
 
-	auto &delete_state = l_state.GetDeleteState(table, tableref, context.client);
-	table.Delete(delete_state, context.client, tableref, del_row_ids, update_count);
-
 	// Arrange the columns in the standard table order, then validate + set the cardinality from the referenced
 	// columns. The del+insert path projects every table column (it re-inserts the full row), so all are referenced.
 	for (idx_t i = 0; i < columns.size(); i++) {
 		mock_chunk.data[columns[i].index].Reference(update_chunk.data[i]);
 	}
 	mock_chunk.CheckCardinality(update_count);
+
+	// Without an index update, the indexed columns keep their values: the new rows hold the old values
+	vector<column_t> value_columns;
+	if (index_update) {
+		for (auto &column_id : l_state.fetch_column_ids) {
+			value_columns.push_back(column_id.GetPrimaryIndex());
+		}
+	} else {
+		for (idx_t i = 0; i < mock_chunk.ColumnCount(); i++) {
+			value_columns.push_back(i);
+		}
+	}
+	DeleteIndexValues index_values(delete_chunk, std::move(value_columns));
+	auto &delete_state = l_state.GetDeleteState(table, tableref, context.client);
+	table.Delete(delete_state, context.client, tableref, del_row_ids, update_count, &index_values);
 
 	table.LocalAppend(tableref, context.client, mock_chunk, bound_constraints, del_row_ids, delete_chunk);
 	if (return_chunk) {

@@ -557,15 +557,14 @@ void Binder::BindDeleteReturningColumns(TableCatalogEntry &table, LogicalGet &ge
 }
 
 void Binder::BindDeleteIndexColumns(TableCatalogEntry &table, LogicalGet &get, vector<idx_t> &return_columns) {
-	// Build a mapping from storage column index to scan chunk index for unique index tracking.
+	// Build a mapping from storage column index to scan chunk index for the indexed column values of the deleted rows.
 	// This is a sparse mapping - only indexed columns have valid indices.
-	// Used when DELETE has no RETURNING but table has unique indexes.
+	// Used when DELETE has no RETURNING but table has indexes.
 	auto &storage = table.GetStorage();
 	auto &info = storage.GetDataTableInfo();
 	auto &indexes = info->GetIndexes();
 
-	// Collect column IDs from unique indexes
-	auto indexed_column_ids = indexes.GetUniqueIndexColumns();
+	auto indexed_column_ids = indexes.GetIndexedColumns();
 
 	if (indexed_column_ids.empty()) {
 		return;
@@ -588,7 +587,7 @@ void Binder::BindDeleteIndexColumns(TableCatalogEntry &table, LogicalGet &get, v
 		auto &col = columns.GetColumn(LogicalIndex(logical_idx));
 		if (!col.Generated()) {
 			auto storage_idx = col.StorageOid();
-			// Only map if this column is in a unique index
+			// Only map if this column is in an index
 			if (indexed_column_ids.count(storage_idx)) {
 				return_columns[storage_idx] = chunk_idx;
 			}

@@ -45,6 +45,7 @@ struct PersistentColumnData;
 struct PersistentRowGroupData;
 struct RowGroupPointer;
 struct TransactionData;
+struct DeleteIndexValues;
 class CollectionScanState;
 class TableFilter;
 class TableFilterSet;
@@ -237,7 +238,8 @@ public:
 	//! Delete the given set of rows in the version manager - optionally collects the ids of the rows that were deleted
 	//! (input_offset is the position of row_ids in the row ids passed to the collection delete)
 	idx_t Delete(TransactionData transaction, DuckTableEntry &table_entry, row_t *row_ids, idx_t count,
-	             idx_t row_group_start, optional_ptr<DeletedRowIds> deleted_ids = nullptr, idx_t input_offset = 0);
+	             idx_t row_group_start, optional_ptr<DeletedRowIds> deleted_ids = nullptr, idx_t input_offset = 0,
+	             optional_ptr<const DeleteIndexValues> index_values = nullptr);
 
 	static vector<RowGroupWriteData> WriteToDisk(RowGroupWriteInfo &info,
 	                                             const vector<const_reference<RowGroup>> &row_groups);
@@ -288,9 +290,11 @@ public:
 
 	void NextVector(CollectionScanState &state);
 
-	//! Writes a delete or an update into the version info of the rows (ids[i] - offset) and pushes its undo entry
+	//! Writes a delete or an update into the version info of the rows (ids[i] - offset) and pushes its undo entry,
+	//! which stores the indexed column values of the written rows if given (index_values.offset + i holds ids[i])
 	void WriteRows(TransactionData transaction, DuckTableEntry &table_entry, idx_t vector_idx, idx_t base_row,
-	               const row_t ids[], idx_t count, row_t offset, bool is_update, WrittenRows &written);
+	               const row_t ids[], idx_t count, row_t offset, bool is_update, WrittenRows &written,
+	               optional_ptr<const DeleteIndexValues> index_values = nullptr);
 	RowVersionManager &GetOrCreateVersionInfo();
 
 	// Serialization

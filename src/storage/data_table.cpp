@@ -1,4 +1,6 @@
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/common/algorithm.hpp"
+#include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/planner/constraints/bound_not_null_constraint.hpp"
 #include "duckdb/planner/constraints/bound_unique_constraint.hpp"
 #include "duckdb/planner/binder.hpp"
@@ -1389,10 +1391,10 @@ void DataTable::RevertAppend(DuckTransaction &transaction, idx_t start_row, idx_
 // Indexes
 //===--------------------------------------------------------------------===//
 void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
-                                  IndexRemovalType removal_type, optional_idx active_checkpoint,
-                                  VisibilityBound bound) {
+                                  IndexRemovalType removal_type, optional_idx active_checkpoint, VisibilityBound bound,
+                                  optional_ptr<const DeleteIndexValues> index_values) {
 	row_groups->RemoveFromIndexes(context, info->indexes, row_identifiers, count, removal_type, active_checkpoint,
-	                              bound);
+	                              bound, index_values);
 }
 
 //===--------------------------------------------------------------------===//
@@ -1461,12 +1463,29 @@ unique_ptr<TableDeleteState> DataTable::InitializeDelete(TableCatalogEntry &tabl
 	return result;
 }
 
+//! The indexed columns to store in the undo entries of a delete, or nullptr if the given values miss any of them
+static unique_ptr<DeleteIndexValues> GetStoredIndexValues(const TableIndexList &indexes,
+                                                          optional_ptr<const DeleteIndexValues> index_values) {
+	if (!index_values) {
+		return nullptr;
+	}
+	auto indexed_columns = indexes.GetIndexedColumns();
+	vector<column_t> column_ids(indexed_columns.begin(), indexed_columns.end());
+	std::sort(column_ids.begin(), column_ids.end());
+	auto &given = index_values->column_ids;
+	if (column_ids.empty() || !std::includes(given.begin(), given.end(), column_ids.begin(), column_ids.end())) {
+		return nullptr;
+	}
+	return make_uniq<DeleteIndexValues>(index_values->chunk, std::move(column_ids), index_values->offset);
+}
+
 idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTableEntry &table_entry,
-                        Vector &row_identifiers, idx_t count) {
+                        Vector &row_identifiers, idx_t count, optional_ptr<const DeleteIndexValues> index_values) {
 	D_ASSERT(row_identifiers.GetType().InternalType() == ROW_TYPE);
 	if (count == 0) {
 		return 0;
 	}
+	auto stored_index_values = GetStoredIndexValues(info->indexes, index_values);
 
 	auto &transaction = DuckTransaction::Get(context, db);
 	auto &local_storage = LocalStorage::Get(transaction);
@@ -1512,7 +1531,14 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 			Fetch(transaction, state.verify_chunk, state.col_ids, offset_ids, current_count, fetch_state);
 			VerifyDeleteConstraints(storage, state, context, state.verify_chunk);
 		}
-		delete_count += row_groups->Delete(transaction, table_entry, ids + current_offset, current_count);
+		unique_ptr<DeleteIndexValues> batch_index_values;
+		if (stored_index_values) {
+			batch_index_values =
+			    make_uniq<DeleteIndexValues>(stored_index_values->chunk, stored_index_values->column_ids,
+			                                 stored_index_values->offset + current_offset);
+		}
+		delete_count += row_groups->Delete(transaction, table_entry, ids + current_offset, current_count, nullptr,
+		                                   batch_index_values.get());
 	}
 	return delete_count;
 }

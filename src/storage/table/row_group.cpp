@@ -2144,9 +2144,11 @@ void RowGroup::GetColumnSegmentInfo(const QueryContext &context, idx_t row_group
 class VersionDeleteState {
 public:
 	VersionDeleteState(RowGroup &info, TransactionData transaction, DuckTableEntry &table_entry, idx_t base_row,
-	                   optional_ptr<DeletedRowIds> deleted_ids, idx_t input_offset)
+	                   optional_ptr<DeletedRowIds> deleted_ids, idx_t input_offset,
+	                   optional_ptr<const DeleteIndexValues> index_values)
 	    : info(info), transaction(transaction), table_entry(table_entry), current_chunk(DConstants::INVALID_INDEX),
-	      count(0), base_row(base_row), delete_count(0), deleted_ids(deleted_ids), input_offset(input_offset) {
+	      count(0), base_row(base_row), delete_count(0), deleted_ids(deleted_ids), input_offset(input_offset),
+	      index_values(index_values) {
 	}
 
 	RowGroup &info;
@@ -2161,6 +2163,8 @@ public:
 	optional_ptr<DeletedRowIds> deleted_ids;
 	//! The position of the next row to flush in the input row ids of the delete
 	idx_t input_offset;
+	//! The indexed column values of the input rows of the delete
+	optional_ptr<const DeleteIndexValues> index_values;
 
 public:
 	void Delete(row_t row_id);
@@ -2168,8 +2172,10 @@ public:
 };
 
 idx_t RowGroup::Delete(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids, idx_t count,
-                       idx_t row_group_start, optional_ptr<DeletedRowIds> deleted_ids, idx_t input_offset) {
-	VersionDeleteState del_state(*this, transaction, table_entry, row_group_start, deleted_ids, input_offset);
+                       idx_t row_group_start, optional_ptr<DeletedRowIds> deleted_ids, idx_t input_offset,
+                       optional_ptr<const DeleteIndexValues> index_values) {
+	VersionDeleteState del_state(*this, transaction, table_entry, row_group_start, deleted_ids, input_offset,
+	                             index_values);
 
 	// obtain a write lock
 	for (idx_t i = 0; i < count; i++) {
@@ -2201,14 +2207,44 @@ void RowGroup::Verify() {
 #endif
 }
 
+//! References the indexed column values of the written rows, which are a subsequence of the input rows ids
+static void SliceWrittenIndexValues(const DeleteIndexValues &index_values, const row_t ids[], idx_t count, row_t offset,
+                                    const WrittenRows &written, DataChunk &result) {
+	SelectionVector sel(written.count);
+	idx_t input_idx = 0;
+	for (idx_t i = 0; i < written.count; i++) {
+		while (UnsafeNumericCast<idx_t>(ids[input_idx] - offset) != written.rows[i]) {
+			input_idx++;
+			D_ASSERT(input_idx < count);
+		}
+		sel.set_index(i, index_values.offset + input_idx);
+		input_idx++;
+	}
+	vector<LogicalType> types;
+	for (auto column_id : index_values.column_ids) {
+		types.push_back(index_values.chunk.data[column_id].GetType());
+	}
+	result.InitializeEmpty(types);
+	result.ReferenceColumns(index_values.chunk, index_values.column_ids);
+	result.Slice(sel, written.count);
+}
+
 void RowGroup::WriteRows(TransactionData transaction, DuckTableEntry &table_entry, idx_t vector_idx, idx_t base_row,
-                         const row_t ids[], idx_t count, row_t offset, bool is_update, WrittenRows &written) {
+                         const row_t ids[], idx_t count, row_t offset, bool is_update, WrittenRows &written,
+                         optional_ptr<const DeleteIndexValues> index_values) {
 	auto &version_info = GetOrCreateVersionInfo();
 	version_info.WriteRows(vector_idx, transaction, ids, count, offset, is_update, written);
 	if (transaction.transaction && written.count > 0) {
 		try {
+			DataChunk written_values;
+			unique_ptr<DeleteIndexValues> written_index_values;
+			if (index_values) {
+				SliceWrittenIndexValues(*index_values, ids, count, offset, written, written_values);
+				written_index_values = make_uniq<DeleteIndexValues>(written_values, index_values->column_ids);
+			}
 			transaction.transaction->PushWrite(is_update ? UndoFlags::UPDATE_ROWS : UndoFlags::DELETE_TUPLE,
-			                                   table_entry, version_info, vector_idx, base_row, written);
+			                                   table_entry, version_info, vector_idx, base_row, written,
+			                                   written_index_values.get());
 		} catch (...) {
 			try {
 				// without an undo entry, nothing would restore the ids - restore them as the entry would have
@@ -2243,7 +2279,13 @@ void VersionDeleteState::Flush() {
 	// it is possible for delete statements to delete the same tuple multiple times when combined with a USING clause
 	// WriteRows skips the tuples that are deleted already, and outputs the tuples it actually deleted
 	WrittenRows deleted;
-	info.WriteRows(transaction, table_entry, current_chunk, base_row + chunk_row, rows, count, 0, false, deleted);
+	unique_ptr<DeleteIndexValues> flush_index_values;
+	if (index_values) {
+		flush_index_values = make_uniq<DeleteIndexValues>(index_values->chunk, index_values->column_ids,
+		                                                  index_values->offset + input_offset);
+	}
+	info.WriteRows(transaction, table_entry, current_chunk, base_row + chunk_row, rows, count, 0, false, deleted,
+	               flush_index_values.get());
 	auto actual_delete_count = deleted.count;
 	delete_count += actual_delete_count;
 	if (deleted_ids) {
@@ -2257,8 +2299,8 @@ void VersionDeleteState::Flush() {
 				deleted_ids->row_ids.push_back(UnsafeNumericCast<row_t>(base_row + chunk_row + deleted.rows[i]));
 			}
 		}
-		input_offset += count;
 	}
+	input_offset += count;
 	count = 0;
 }
 

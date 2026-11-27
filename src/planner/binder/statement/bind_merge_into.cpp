@@ -428,7 +428,7 @@ BoundStatement Binder::BindNode(MergeQueryNode &node) {
 		} else if (table.IsDuckTable()) {
 			// Only optimize for DuckDB tables (not attached external tables like SQLite)
 			auto &storage = table.GetStorage();
-			if (storage.HasUniqueIndexes()) {
+			if (storage.HasIndexes()) {
 				auto &target_binding = join_ref.get().children[inverted ? 0 : 1];
 				BindDeleteIndexColumns(table, get, merge_into->delete_return_columns, projection_expressions,
 				                       *target_binding);

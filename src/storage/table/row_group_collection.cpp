@@ -25,6 +25,7 @@
 #include "duckdb/storage/table/scan_state.hpp"
 #include "duckdb/storage/table_storage_info.hpp"
 #include "duckdb/transaction/duck_transaction.hpp"
+#include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/common/storage_compatibility.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -1037,7 +1038,8 @@ void RowGroupCollection::MergeStorage(RowGroupCollection &data, optional_ptr<Dat
 // Delete
 //===--------------------------------------------------------------------===//
 idx_t RowGroupCollection::Delete(TransactionData transaction, DuckTableEntry &table_entry, row_t *ids, idx_t count,
-                                 optional_ptr<DeletedRowIds> deleted_ids) {
+                                 optional_ptr<DeletedRowIds> deleted_ids,
+                                 optional_ptr<const DeleteIndexValues> index_values) {
 	idx_t delete_count = 0;
 	// delete is in the row groups
 	// we need to figure out for each id to which row group it belongs
@@ -1064,8 +1066,8 @@ idx_t RowGroupCollection::Delete(TransactionData transaction, DuckTableEntry &ta
 				break;
 			}
 		}
-		delete_count +=
-		    current_row_group.Delete(transaction, table_entry, ids + start, pos - start, row_start, deleted_ids, start);
+		delete_count += current_row_group.Delete(transaction, table_entry, ids + start, pos - start, row_start,
+		                                         deleted_ids, start, index_values);
 	} while (pos < count);
 
 	return delete_count;
@@ -1129,13 +1131,39 @@ void RowGroupCollection::Update(TransactionData transaction, DuckTableEntry &tab
 	}
 }
 
+//! Whether the indexed column values set every column
+static bool ValuesCoverColumns(const DeleteIndexValues &index_values, const unordered_set<column_t> &column_ids) {
+	for (auto column_id : column_ids) {
+		if (!std::binary_search(index_values.column_ids.begin(), index_values.column_ids.end(), column_id)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes,
                                            Vector &row_identifiers, idx_t count, IndexRemovalType removal_type,
-                                           optional_idx active_checkpoint, VisibilityBound bound) {
+                                           optional_idx active_checkpoint, VisibilityBound bound,
+                                           optional_ptr<const DeleteIndexValues> index_values) {
 	// Collect the indexed columns of the indexes we remove from.
 	auto indexed_column_id_set = indexes.GetIndexedColumns(bound);
 	if (indexed_column_id_set.empty()) {
 		// no index was added before this commit
+		return;
+	}
+
+	if (index_values && ValuesCoverColumns(*index_values, indexed_column_id_set)) {
+		DataChunk result_chunk;
+		result_chunk.InitializeEmpty(types);
+		for (idx_t j = 0; j < types.size(); j++) {
+			if (indexed_column_id_set.count(j)) {
+				result_chunk.data[j].Reference(index_values->chunk.data[j]);
+				continue;
+			}
+			result_chunk.data[j].Reference(Value(types[j]), count_t(count));
+		}
+		result_chunk.CheckCardinality(count);
+		indexes.RemoveFromIndexes(result_chunk, row_identifiers, removal_type, active_checkpoint, bound);
 		return;
 	}
 
