@@ -1,0 +1,70 @@
+# name: test/sql/index/art/create_drop/test_art_add_unique_during_insert_commits.test_slow
+# description: Test ALTER TABLE ADD UNIQUE while another connection commits inserts
+# group: [create_drop]
+
+statement ok
+CREATE TABLE t AS SELECT range AS c0, range AS c1, range AS c2, range AS c3 FROM range(1000000);
+
+# thread 0 adds a UNIQUE constraint per column, thread 1 commits inserts of new keys;
+# an insert into the table version an ALTER replaced conflicts, and its revert makes that ALTER fail
+# FIXME: the revert needlessly fails an ALTER that shares the table's rows; once fixed, make it statement ok and drop "no changes"
+concurrentloop threadid 0 2
+
+loop j 0 4
+
+onlyif threadid=0
+statement maybe
+ALTER TABLE t ADD UNIQUE (c{j});
+----
+underlying table state was reverted by a concurrent transaction
+
+endloop
+
+loop i 0 20
+
+onlyif threadid=1
+statement maybe
+INSERT INTO t SELECT r, r, r, r FROM (SELECT 10000000 + {i} * 100000 + range AS r FROM range(100000));
+----
+<REGEX>:.*(attempting to insert into table "t" but it has been altered|another transaction has (altered|no changes) this table).*
+
+endloop
+
+endloop
+
+# add the constraints whose ALTER lost a conflict
+loop j 0 4
+
+statement maybe
+ALTER TABLE t ADD UNIQUE (c{j});
+----
+already has the constraint
+
+endloop
+
+query I
+SELECT count(*) FROM duckdb_constraints() WHERE table_name = 't' AND constraint_type = 'UNIQUE';
+----
+4
+
+# reinsert the keys of the failed inserts: a reverted key left in an index would be a duplicate
+statement ok
+INSERT INTO t SELECT r, r, r, r FROM (SELECT 10000000 + range AS r FROM range(2000000)) WHERE NOT EXISTS (SELECT 1 FROM t WHERE c0 = r);
+
+query IIIII
+SELECT count(*), count(DISTINCT c0), count(DISTINCT c1), count(DISTINCT c2), count(DISTINCT c3) FROM t;
+----
+3000000	3000000	3000000	3000000	3000000
+
+# range scans through the new indexes find every committed row
+statement ok
+SET index_scan_max_count = 10000000;
+
+loop j 0 4
+
+query I
+SELECT (SELECT count(*) FROM t WHERE c{j} >= 10000000) = (SELECT count(*) FILTER (WHERE c{j} >= 10000000) FROM t);
+----
+true
+
+endloop
