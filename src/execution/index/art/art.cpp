@@ -1132,7 +1132,8 @@ void ART::TransformToDeprecated() {
 	auto &block_manager = (*allocators)[idx]->block_manager;
 	unsafe_unique_ptr<FixedSizeAllocator> deprecated_allocator = nullptr;
 	if (prefix_count != PrefixHandle::DEPRECATED_COUNT) {
-		auto prefix_size = NumericCast<idx_t>(PrefixHandle::DEPRECATED_COUNT) + NumericCast<idx_t>(PrefixHandle::METADATA_SIZE);
+		auto prefix_size =
+		    NumericCast<idx_t>(PrefixHandle::DEPRECATED_COUNT) + NumericCast<idx_t>(PrefixHandle::METADATA_SIZE);
 		deprecated_allocator = make_unsafe_uniq<FixedSizeAllocator>(prefix_size, block_manager);
 	}
 
