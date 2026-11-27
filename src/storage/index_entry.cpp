@@ -226,10 +226,6 @@ static void ApplyIndexRemoval(BoundIndex &index, IndexDeltas &deltas, DataChunk 
 		// Directly remove from the main index without appending to delta indexes.
 		index.Delete(chunk, row_ids);
 		break;
-	case IndexRemovalType::REVERT_MAIN_INDEX_ONLY:
-		// Revert main index only append - just add back to the index.
-		AppendIndexEntries(index, chunk, row_ids);
-		break;
 	case IndexRemovalType::MAIN_INDEX:
 		// Regular removal from the main index - add rows to the delta index if required.
 		if (supports_delta_indexes) {
@@ -237,15 +233,6 @@ static void ApplyIndexRemoval(BoundIndex &index, IndexDeltas &deltas, DataChunk 
 			AppendIndexEntries(deleted_rows, chunk, row_ids);
 		}
 		index.Delete(chunk, row_ids);
-		break;
-	case IndexRemovalType::REVERT_MAIN_INDEX:
-		// Revert regular append to the main index - remove from deleted_rows_in_use if we appended there before.
-		AppendIndexEntries(index, chunk, row_ids);
-		if (supports_delta_indexes) {
-			if (auto delta = deltas.Find(IndexDeltaType::DELETED_ROWS_IN_USE)) {
-				delta->Delete(chunk, row_ids);
-			}
-		}
 		break;
 	case IndexRemovalType::DELETED_ROWS_IN_USE:
 		// Remove from the removal index if we appended any rows.
@@ -283,28 +270,6 @@ static void ApplyIndexRemovalToDeltas(BoundIndex &index, IndexDeltas &deltas, Da
 			// MAIN_INDEX also needs to retain the rows in deleted_rows_in_use.
 			auto &deleted_rows = deltas.GetOrCreate(index, IndexDeltaType::DELETED_ROWS_IN_USE);
 			AppendIndexEntries(deleted_rows, chunk, row_ids);
-		}
-		break;
-	}
-	case IndexRemovalType::REVERT_MAIN_INDEX_ONLY:
-	case IndexRemovalType::REVERT_MAIN_INDEX: {
-		auto &removed_data = deltas.GetOrCreate(index, IndexDeltaType::REMOVED_DATA);
-		// Revert adding to the main index.
-		// We have added data to the deltas as well, so the removal might have EITHER:
-		// (1) added data to "removed_data" or
-		// (2) removed data from "added_data".
-		// Revert by first trying to remove from "removed_data"; any rows that were not removed are re-added to
-		// "added_data".
-		if (auto added_data = deltas.Find(IndexDeltaType::ADDED_DATA)) {
-			DeleteOrAppend(removed_data, *added_data, chunk, row_ids);
-		} else {
-			removed_data.Delete(chunk, row_ids);
-		}
-		if (removal_type == IndexRemovalType::REVERT_MAIN_INDEX) {
-			// We also need to remove from "deleted_rows_in_use".
-			if (auto delta = deltas.Find(IndexDeltaType::DELETED_ROWS_IN_USE)) {
-				delta->Delete(chunk, row_ids);
-			}
 		}
 		break;
 	}

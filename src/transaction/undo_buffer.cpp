@@ -193,16 +193,28 @@ void UndoBuffer::Commit(UndoBuffer::IteratorState &iterator_state, CommitInfo &i
 	allocator.ReleaseHeadPin();
 	active_transaction_state = info.active_transactions;
 
-	CommitState state(transaction, info.commit_id, active_transaction_state, CommitMode::COMMIT);
+	CommitState state(transaction, info.commit_id, CommitMode::COMMIT);
 	IterateEntries(iterator_state, [&](UndoFlags type, data_ptr_t data) { state.CommitEntry(type, data, info); });
-	state.Verify();
+}
+
+void UndoBuffer::CommitIndexRemovals(CommitInfo &info) {
+	IndexDataRemover remover(transaction, QueryContext(),
+	                         IndexDataRemover::GetCommitRemovalType(active_transaction_state));
+	UndoBuffer::IteratorState iterator_state;
+	IterateEntries(iterator_state, [&](UndoFlags type, data_ptr_t data) {
+		if (type != UndoFlags::DELETE_TUPLE) {
+			return;
+		}
+		if (remover.PushDelete(*reinterpret_cast<DeleteInfo *>(data))) {
+			info.has_index_deletes = true;
+		}
+	});
+	remover.Verify();
 }
 
 void UndoBuffer::RevertCommit(UndoBuffer::IteratorState &end_state, transaction_t transaction_id) {
-	CommitState state(transaction, transaction_id, active_transaction_state, CommitMode::REVERT_COMMIT);
+	CommitState state(transaction, transaction_id, CommitMode::REVERT_COMMIT);
 	ReverseIterateEntries(end_state, [&](UndoFlags type, data_ptr_t data) { state.RevertCommit(type, data); });
-
-	state.Verify();
 }
 
 void UndoBuffer::Rollback() {

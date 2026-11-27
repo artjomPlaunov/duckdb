@@ -15,10 +15,6 @@ enum class IndexRemovalType {
 	MAIN_INDEX,
 	//! Remove from main index only
 	MAIN_INDEX_ONLY,
-	//! Revert MAIN_INDEX, i.e. append to main index and remove from deleted_rows_in_use
-	REVERT_MAIN_INDEX,
-	//! Revert MAIN_INDEX_ONLY, i.e. append to main index
-	REVERT_MAIN_INDEX_ONLY,
 	//! Remove from deleted_rows_in_use
 	DELETED_ROWS_IN_USE
 };

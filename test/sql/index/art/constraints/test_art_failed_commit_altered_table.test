@@ -1,0 +1,88 @@
+# name: test/sql/index/art/constraints/test_art_failed_commit_altered_table.test
+# description: A commit that deleted and re-inserted a key fails on a table another transaction altered
+# group: [constraints]
+
+statement ok
+CREATE TABLE t (id INTEGER PRIMARY KEY, v VARCHAR);
+
+statement ok
+CREATE TABLE u (a INTEGER);
+
+statement ok
+INSERT INTO t VALUES (1, 'old'), (2, 'two');
+
+statement ok
+INSERT INTO u VALUES (1), (2);
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM t WHERE id = 1;
+
+statement ok con1
+INSERT INTO t VALUES (1, 'new');
+
+statement ok con1
+DELETE FROM u WHERE a = 1;
+
+statement ok con2
+ALTER TABLE u ADD COLUMN b INTEGER;
+
+statement error con1
+COMMIT;
+----
+<REGEX>:TransactionContext Error.*another transaction has altered this table.*
+
+query II
+SELECT id, v FROM t ORDER BY id;
+----
+1	old
+2	two
+
+query I
+SELECT v FROM t WHERE id = 1;
+----
+old
+
+query II
+SELECT a, b FROM u ORDER BY a;
+----
+1	NULL
+2	NULL
+
+statement error
+INSERT INTO t VALUES (1, 'dup');
+----
+<REGEX>:Constraint Error.*Duplicate key "id: 1".*
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE id = 1;
+
+statement ok
+INSERT INTO t VALUES (1, 'new');
+
+statement ok
+DELETE FROM u WHERE a = 1;
+
+statement ok
+COMMIT;
+
+query II
+SELECT id, v FROM t ORDER BY id;
+----
+1	new
+2	two
+
+query I
+SELECT v FROM t WHERE id = 1;
+----
+new
+
+statement error
+INSERT INTO t VALUES (1, 'dup');
+----
+<REGEX>:Constraint Error.*Duplicate key "id: 1".*

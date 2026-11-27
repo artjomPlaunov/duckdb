@@ -1,0 +1,99 @@
+# name: test/sql/index/art/create_drop/test_art_create_index_during_failing_reinsert_commits.test_slow
+# description: Commits that delete and re-insert primary keys fail while indexes are built
+# group: [create_drop]
+
+statement ok
+CREATE TABLE t (a INTEGER PRIMARY KEY, b INTEGER);
+
+statement ok
+INSERT INTO t SELECT range, range FROM range(200000);
+
+statement ok
+SET GLOBAL debug_force_commit_failure = true;
+
+concurrentloop threadid 0 3
+
+loop i 0 20
+
+onlyif threadid=0
+statement ok
+BEGIN;
+
+onlyif threadid=0
+statement ok
+CREATE INDEX idx_b ON t(b);
+
+onlyif threadid=0
+statement ok
+ROLLBACK;
+
+onlyif threadid=0
+statement error
+CREATE UNIQUE INDEX idx_unique_b ON t(b);
+----
+Forced commit failure
+
+skipif threadid=0
+statement ok
+BEGIN;
+
+skipif threadid=0
+statement ok
+DELETE FROM t WHERE a >= ({threadid} * 20 + {i}) * 1000 AND a < ({threadid} * 20 + {i} + 1) * 1000;
+
+skipif threadid=0
+statement ok
+INSERT INTO t SELECT range, -range FROM range(({threadid} * 20 + {i}) * 1000, ({threadid} * 20 + {i} + 1) * 1000);
+
+skipif threadid=0
+statement error
+COMMIT;
+----
+Forced commit failure
+
+endloop
+
+endloop
+
+statement ok
+SET GLOBAL debug_force_commit_failure = false;
+
+query III
+SELECT count(*), sum(a), sum(b) FROM t;
+----
+200000	19999900000	19999900000
+
+query I
+SELECT b FROM t WHERE a = 42424;
+----
+42424
+
+statement ok
+CREATE UNIQUE INDEX idx_unique_b ON t(b);
+
+statement error
+INSERT INTO t VALUES (42424, -1);
+----
+<REGEX>:Constraint Error.*Duplicate key "a: 42424".*
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE a < 1000;
+
+statement ok
+INSERT INTO t SELECT range, -range - 1 FROM range(1000);
+
+statement ok
+COMMIT;
+
+query II
+SELECT count(*), sum(b) FROM t WHERE a < 1000;
+----
+1000	-500500
+
+query I
+SELECT b FROM t WHERE a = 7;
+----
+-8

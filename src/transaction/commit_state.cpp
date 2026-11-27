@@ -121,10 +121,6 @@ void IndexDataRemover::Verify() {
 #endif
 }
 
-void CommitState::Verify() {
-	index_data_remover.Verify();
-}
-
 void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) {
 	if (count == 0) {
 		return;
@@ -155,26 +151,17 @@ void IndexDataRemover::Flush(DataTable &table, row_t *row_numbers, idx_t count) 
 //===--------------------------------------------------------------------===//
 // CommitState
 //===--------------------------------------------------------------------===//
-CommitState::CommitState(DuckTransaction &transaction_p, transaction_t commit_id,
-                         ActiveTransactionState transaction_state, CommitMode commit_mode)
-    : transaction(transaction_p), commit_id(commit_id),
-      index_data_remover(transaction, QueryContext(), GetIndexRemovalType(transaction_state, commit_mode)) {
+CommitState::CommitState(DuckTransaction &transaction_p, transaction_t commit_id, CommitMode commit_mode)
+    : transaction(transaction_p), commit_id(commit_id) {
 	D_ASSERT(commit_mode != CommitMode::COMMIT || IsCommitted(commit_id));
 }
 
-IndexRemovalType CommitState::GetIndexRemovalType(ActiveTransactionState transaction_state, CommitMode commit_mode) {
-	if (commit_mode == CommitMode::COMMIT) {
-		if (transaction_state == ActiveTransactionState::NO_OTHER_TRANSACTIONS) {
-			// if there are no other active transactions we don't need to store removed rows in deleted_rows_in_use
-			return IndexRemovalType::MAIN_INDEX_ONLY;
-		}
-		return IndexRemovalType::MAIN_INDEX;
-	}
-	// revert the appends to the indexes
+IndexRemovalType IndexDataRemover::GetCommitRemovalType(ActiveTransactionState transaction_state) {
 	if (transaction_state == ActiveTransactionState::NO_OTHER_TRANSACTIONS) {
-		return IndexRemovalType::REVERT_MAIN_INDEX_ONLY;
+		// if there are no other active transactions we don't need to store removed rows in deleted_rows_in_use
+		return IndexRemovalType::MAIN_INDEX_ONLY;
 	}
-	return IndexRemovalType::REVERT_MAIN_INDEX;
+	return IndexRemovalType::MAIN_INDEX;
 }
 
 void CommitState::CommitEntryDrop(CatalogEntry &entry, data_ptr_t dataptr, CommitInfo &info) {
@@ -400,9 +387,8 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &commi
 			throw TransactionException("Attempting to modify table %s but another transaction has %s this table",
 			                           table_name, table_modification);
 		}
-		if (CommitDelete(*info, transaction.GetTransactionId())) {
-			commit_info.has_index_deletes = true;
-		}
+		// mark the tuples as committed: their keys leave the indexes after the commit marker
+		info->version_info->CommitWrite(transaction.GetTransactionId(), commit_id, *info, true);
 		break;
 	}
 	case UndoFlags::UPDATE_TUPLE: {
@@ -432,13 +418,6 @@ void CommitState::CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &commi
 	}
 }
 
-bool CommitState::CommitDelete(DeleteInfo &info, transaction_t old_id) {
-	// mark the tuples as committed
-	info.version_info->CommitWrite(old_id, commit_id, info, true);
-	// delete from indexes
-	return index_data_remover.PushDelete(info);
-}
-
 void CommitState::RevertCommit(UndoFlags type, data_ptr_t data) {
 	transaction_t transaction_id = commit_id;
 	switch (type) {
@@ -462,7 +441,7 @@ void CommitState::RevertCommit(UndoFlags type, data_ptr_t data) {
 		// deletion:
 		auto info = reinterpret_cast<DeleteInfo *>(data);
 		// revert the commit by writing the (uncommitted) transaction_id back into the version info
-		CommitDelete(*info, transaction.commit_id);
+		info->version_info->CommitWrite(transaction.commit_id, transaction_id, *info, true);
 		break;
 	}
 	case UndoFlags::UPDATE_TUPLE: {

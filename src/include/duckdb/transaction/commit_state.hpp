@@ -78,6 +78,7 @@ public:
 	//! Removes the deleted rows from the indexes; returns true if they stay in deleted_rows_in_use
 	bool PushDelete(DeleteInfo &info);
 	void Verify();
+	static IndexRemovalType GetCommitRemovalType(ActiveTransactionState transaction_state);
 
 private:
 	void Flush(DataTable &table, row_t *row_numbers, idx_t count);
@@ -95,25 +96,18 @@ private:
 
 class CommitState {
 public:
-	explicit CommitState(DuckTransaction &transaction, transaction_t commit_id,
-	                     ActiveTransactionState transaction_state, CommitMode commit_mode);
+	explicit CommitState(DuckTransaction &transaction, transaction_t commit_id, CommitMode commit_mode);
 
 public:
 	void CommitEntry(UndoFlags type, data_ptr_t data, CommitInfo &info);
 	void RevertCommit(UndoFlags type, data_ptr_t data);
-	void Flush();
-	void Verify();
-	static IndexRemovalType GetIndexRemovalType(ActiveTransactionState transaction_state, CommitMode commit_mode);
 
 private:
 	void CommitEntryDrop(CatalogEntry &entry, data_ptr_t extra_data, CommitInfo &info);
-	//! Returns true if the deleted rows stay in deleted_rows_in_use until cleanup
-	bool CommitDelete(DeleteInfo &info, transaction_t old_id);
 
 private:
 	DuckTransaction &transaction;
 	transaction_t commit_id;
-	IndexDataRemover index_data_remover;
 };
 
 } // namespace duckdb
