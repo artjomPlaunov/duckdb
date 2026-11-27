@@ -1,0 +1,126 @@
+# name: test/sql/constraints/foreignkey/test_fk_commit_check.test
+# description: Foreign keys are verified at COMMIT against the commits of other transactions
+# group: [foreignkey]
+
+statement ok
+CREATE TABLE p (id INTEGER PRIMARY KEY, v INTEGER);
+
+statement ok
+CREATE TABLE c (pid INTEGER REFERENCES p (id));
+
+statement ok
+INSERT INTO p SELECT i, i FROM range(100) t(i);
+
+# a child insert commits first, then the delete of its parent fails at COMMIT
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO c VALUES (5);
+
+statement ok con2
+BEGIN;
+
+statement ok con2
+DELETE FROM p WHERE id = 5;
+
+statement ok con1
+COMMIT;
+
+statement error con2
+COMMIT;
+----
+<REGEX>:.*Violates foreign key constraint because key "pid: 5" is still referenced by a foreign key in a different table.*
+
+# a parent delete commits first, then the insert of its child fails at COMMIT
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM p WHERE id = 42;
+
+statement ok con2
+BEGIN;
+
+statement ok con2
+INSERT INTO c VALUES (42);
+
+statement ok con1
+COMMIT;
+
+statement error con2
+COMMIT;
+----
+<REGEX>:.*Violates foreign key constraint because key "id: 42" does not exist in the referenced table.*
+
+# a parent key update commits first, then the insert of a child of the old key fails at COMMIT
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO c VALUES (6);
+
+statement ok con2
+UPDATE p SET id = 600 WHERE id = 6;
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*Violates foreign key constraint because key "id: 6" does not exist in the referenced table.*
+
+query I
+SELECT count(*) FROM c WHERE pid NOT IN (SELECT id FROM p);
+----
+0
+
+# an update of the parent that keeps its key does not orphan the children
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO c VALUES (7);
+
+statement ok con2
+UPDATE p SET v = -7 WHERE id = 7;
+
+statement ok con1
+COMMIT;
+
+# a child row whose key does not change is not a new reference
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM c WHERE pid = 7;
+
+statement ok con1
+INSERT INTO c VALUES (7);
+
+statement ok con1
+COMMIT;
+
+# a self-referencing table
+statement ok
+CREATE TABLE s (id INTEGER PRIMARY KEY, parent INTEGER REFERENCES s (id));
+
+statement ok
+INSERT INTO s VALUES (1, NULL);
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO s VALUES (2, 1);
+
+statement ok con2
+DELETE FROM s WHERE id = 1;
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*Violates foreign key constraint because key "id: 1" does not exist in the referenced table.*
+
+query I
+SELECT count(*) FROM s;
+----
+0

@@ -11,6 +11,7 @@ add_library_unity(
   transaction_manager.cpp
   commit_state.cpp
   commit_index_changes.cpp
+  commit_foreign_keys.cpp
   rollback_state.cpp
   cleanup_state.cpp
   wal_write_state.cpp)

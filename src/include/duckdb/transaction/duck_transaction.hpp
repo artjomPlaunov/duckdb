@@ -96,8 +96,11 @@ public:
 
 	bool ChangesMade();
 	UndoBufferProperties GetUndoProperties();
-	//! Calls the callback for each delete of committed rows of the table
-	void ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback);
+	//! Calls the callback for each delete of committed rows of the table (of every table if none is given)
+	void ScanDeletes(optional_ptr<const DataTableInfo> table_info,
+	                 const std::function<void(DeleteInfo &info)> &callback);
+	//! Verifies the foreign keys of the commit, once, under the commit lock before it changes a shared index
+	void VerifyForeignKeys(ClientContext &context);
 	//! Prepares the changes of the commit to the unique indexes of the tables, before the commit lock is taken
 	ErrorData PrepareIndexChanges() noexcept;
 
@@ -147,6 +150,8 @@ private:
 	reference_map_t<SequenceCatalogEntry, reference<SequenceValue>> sequence_usage;
 	//! Flag to prevent auto-checkpointing inside a checkpoint transaction.
 	atomic<bool> is_checkpoint_transaction {false};
+	//! Whether the commit verified the foreign keys already
+	bool foreign_keys_verified = false;
 };
 
 } // namespace duckdb

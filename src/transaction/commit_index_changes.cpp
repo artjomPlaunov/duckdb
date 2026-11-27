@@ -19,43 +19,43 @@
 
 namespace duckdb {
 
+IndexKeyGenerator::IndexKeyGenerator(DatabaseInstance &db, shared_ptr<IndexEntry> entry_p)
+    : entry(std::move(entry_p)), executor(db) {
+	auto handle = entry->GetReadHandle<BoundIndex>();
+	expressions = handle->CopyBoundExpressions();
+	for (auto &expression : expressions) {
+		executor.AddExpression(*expression);
+	}
+	key_chunk.Initialize(Allocator::DefaultAllocator(), handle->GetLogicalTypes());
+}
+
+void IndexKeyGenerator::GenerateKeys(DataChunk &table_chunk, ArenaAllocator &arena, unsafe_vector<ARTKey> &keys) {
+	key_chunk.Reset();
+	executor.Execute(table_chunk, key_chunk);
+	keys.resize(key_chunk.size());
+	auto handle = entry->GetReadHandle<BoundIndex>();
+	handle->Cast<ART>().GenerateKeys(arena, key_chunk, keys);
+}
+
+bool ARTKeyLessThan(const ARTKey &left, const ARTKey &right) {
+	return right > left;
+}
+
 namespace {
 
 //! The keys of one unique index that the transaction deleted, and the live local rows that insert them again
 struct PreparedIndex {
-	PreparedIndex(DatabaseInstance &db, shared_ptr<IndexEntry> entry_p)
-	    : swaps(std::move(entry_p)), executor(db), arena(Allocator::DefaultAllocator()) {
-		auto handle = swaps.entry->GetReadHandle<BoundIndex>();
-		expressions = handle->CopyBoundExpressions();
-		for (auto &expression : expressions) {
-			executor.AddExpression(*expression);
-		}
-		key_chunk.Initialize(Allocator::DefaultAllocator(), handle->GetLogicalTypes());
+	PreparedIndex(DatabaseInstance &db, shared_ptr<IndexEntry> entry)
+	    : swaps(entry), generator(db, std::move(entry)), arena(Allocator::DefaultAllocator()) {
 	}
 
 	IndexSwaps swaps;
-	//! A private copy of the index expressions: other commits use the executor of the index meanwhile
-	vector<unique_ptr<Expression>> expressions;
-	ExpressionExecutor executor;
-	DataChunk key_chunk;
+	IndexKeyGenerator generator;
 	ArenaAllocator arena;
 	unsafe_vector<ARTKey> deleted_keys;
 	//! Whether a live local row inserts the deleted key again
 	vector<bool> inserted;
-
-	//! Executes the index expressions on a chunk in table layout and generates its keys
-	void GenerateKeys(DataChunk &table_chunk, ArenaAllocator &key_arena, unsafe_vector<ARTKey> &keys) {
-		key_chunk.Reset();
-		executor.Execute(table_chunk, key_chunk);
-		keys.resize(key_chunk.size());
-		auto handle = swaps.entry->GetReadHandle<BoundIndex>();
-		handle->Cast<ART>().GenerateKeys(key_arena, key_chunk, keys);
-	}
 };
-
-bool KeyLessThan(const ARTKey &left, const ARTKey &right) {
-	return right > left;
-}
 
 } // namespace
 
@@ -92,7 +92,7 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 	// the keys of the committed rows the transaction deleted, from the values the deletes stored
 	bool has_deletes = false;
 	unsafe_vector<ARTKey> keys;
-	transaction.ScanDeletes(table_info, [&](DeleteInfo &info) {
+	transaction.ScanDeletes(&table_info, [&](DeleteInfo &info) {
 		has_deletes = true;
 		auto &version_table = info.table->GetStorage();
 		row_t row_numbers[STANDARD_VECTOR_SIZE];
@@ -105,7 +105,7 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 		DataChunk rows;
 		version_table.GetIndexedRows(row_ids, info.count, index_values.get(), fetch_chunk, rows);
 		for (auto &index : indexes) {
-			index->GenerateKeys(rows, index->arena, keys);
+			index->generator.GenerateKeys(rows, index->arena, keys);
 			for (idx_t i = 0; i < info.count; i++) {
 				if (!keys[i].Empty()) {
 					index->deleted_keys.push_back(keys[i]);
@@ -120,7 +120,7 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 
 	bool has_deleted_keys = false;
 	for (auto &index : indexes) {
-		std::sort(index->deleted_keys.begin(), index->deleted_keys.end(), KeyLessThan);
+		std::sort(index->deleted_keys.begin(), index->deleted_keys.end(), ARTKeyLessThan);
 		index->inserted.resize(index->deleted_keys.size(), false);
 		has_deleted_keys = has_deleted_keys || !index->deleted_keys.empty();
 	}
@@ -152,13 +152,13 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 					continue;
 				}
 				chunk_arena.Reset();
-				index->GenerateKeys(table_chunk, chunk_arena, keys);
+				index->generator.GenerateKeys(table_chunk, chunk_arena, keys);
 				for (idx_t i = 0; i < index_chunk.size(); i++) {
 					if (keys[i].Empty()) {
 						continue;
 					}
-					auto it =
-					    std::lower_bound(index->deleted_keys.begin(), index->deleted_keys.end(), keys[i], KeyLessThan);
+					auto it = std::lower_bound(index->deleted_keys.begin(), index->deleted_keys.end(), keys[i],
+					                           ARTKeyLessThan);
 					if (it == index->deleted_keys.end() || !(*it == keys[i])) {
 						continue;
 					}
@@ -166,7 +166,7 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 					if (index->inserted[key_idx]) {
 						return ErrorData(
 						    ConstraintException("PRIMARY KEY or UNIQUE constraint violation: duplicate key \"%s\"",
-						                        BoundIndex::AppendRowError(index->key_chunk, i)));
+						                        BoundIndex::AppendRowError(index->generator.key_chunk, i)));
 					}
 					index->inserted[key_idx] = true;
 					index->swaps.positions.push_back(position + i);

@@ -164,9 +164,15 @@ public:
 	//! Verifies that rows can be appended to the bound physical index.
 	void VerifyAppend(const shared_ptr<IndexEntry> &delete_entry, DataChunk &chunk,
 	                  optional_ptr<ConflictManager> manager);
-	//! Verifies a foreign key constraint against the physical index and its checkpoint deltas.
+	//! Verifies a foreign key constraint against the physical index and its checkpoint deltas, excluding the rows of
+	//! the delete entry from the index (and from the ADDED delta if requested).
 	void VerifyForeignKey(const shared_ptr<IndexEntry> &delete_entry, DataChunk &chunk,
-	                      ConflictManager &conflict_manager);
+	                      ConflictManager &conflict_manager, bool exclude_from_added_data = false);
+	//! Creates an empty copy of the bound physical index with its constraint type.
+	unique_ptr<BoundIndex> CreateEmptyCopy() const;
+	//! Appends to out the row ids that the committed state of the ART holds for the keys (expression values, no
+	//! NULLs): the index and its ADDED delta, minus its REMOVED delta
+	void ScanCommittedRowIds(DataChunk &key_chunk, unsafe_vector<row_t> &out) const;
 	//! Constructs the physical index's constraint violation message.
 	string GetConstraintViolationMessage(VerifyExistenceType verify_type, idx_t failed_index, DataChunk &input) const;
 	//! Verifies that the physical index is not updated by the given columns.

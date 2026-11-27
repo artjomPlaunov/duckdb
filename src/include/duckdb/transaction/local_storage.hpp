@@ -243,6 +243,10 @@ public:
 	void Commit(Context &context, optional_ptr<StorageCommitState> commit_state);
 	//! Prepares the changes of the commit to the unique indexes of the tables (see CommitIndexChanges)
 	ErrorData PrepareIndexChanges();
+	//! The storages of the tables the transaction wrote to
+	vector<shared_ptr<LocalTableStorage>> GetStorages() const {
+		return table_manager.GetEntries();
+	}
 	//! Rollback the local storage
 	void Rollback();
 

@@ -9,6 +9,8 @@
 
 #include "duckdb/common/types/conflict_manager.hpp"
 #include "duckdb/execution/index/art/art.hpp"
+#include "duckdb/common/algorithm.hpp"
+#include "duckdb/execution/index/art/iterator.hpp"
 #include "duckdb/execution/index/unbound_index.hpp"
 #include "duckdb/planner/expression_binder/index_binder.hpp"
 
@@ -435,7 +437,7 @@ void IndexEntry::VerifyAppend(const shared_ptr<IndexEntry> &delete_entry, DataCh
 }
 
 void IndexEntry::VerifyForeignKey(const shared_ptr<IndexEntry> &delete_entry, DataChunk &chunk,
-                                  ConflictManager &conflict_manager) {
+                                  ConflictManager &conflict_manager, bool exclude_from_added_data) {
 	auto entry_lock = lock.GetExclusiveLock();
 	D_ASSERT(owned_index->IsBound());
 	auto &bound_index = owned_index->Cast<BoundIndex>();
@@ -455,7 +457,54 @@ void IndexEntry::VerifyForeignKey(const shared_ptr<IndexEntry> &delete_entry, Da
 	if (auto delta = deltas.Find(IndexDeltaType::ADDED_DATA)) {
 		// if we have added any rows during checkpoint - check in that index as well
 		IndexAppendInfo added_data_info;
+		if (exclude_from_added_data && delete_entry) {
+			added_data_info.delete_indexes.push_back(delete_entry->owned_index->Cast<BoundIndex>());
+		}
 		delta->VerifyConstraint(chunk, added_data_info, conflict_manager);
+	}
+}
+
+unique_ptr<BoundIndex> IndexEntry::CreateEmptyCopy() const {
+	auto entry_lock = lock.GetSharedLock();
+	D_ASSERT(owned_index->IsBound());
+	auto &bound_index = owned_index->Cast<BoundIndex>();
+	return bound_index.CreateEmptyCopy(bound_index.GetConstraintType());
+}
+
+//! Appends the row ids the ART holds for the keys
+static void ScanRowIds(const ART &art, DataChunk &key_chunk, unsafe_vector<row_t> &out) {
+	auto keys = make_uniq<DataChunk>();
+	keys->Initialize(Allocator::DefaultAllocator(), key_chunk.GetTypes(), key_chunk.size());
+	key_chunk.Copy(*keys);
+	auto state = art.InitializeBatchScan(std::move(keys));
+	RowIdVectorOutput output(NumericLimits<idx_t>::Maximum());
+	if (!art.Scan(*state, output)) {
+		throw InternalException("unbounded ART batch scan exceeded its capacity");
+	}
+	auto rows = output.TakeRows();
+	out.insert(out.end(), rows.begin(), rows.end());
+}
+
+void IndexEntry::ScanCommittedRowIds(DataChunk &key_chunk, unsafe_vector<row_t> &out) const {
+	auto entry_lock = lock.GetSharedLock();
+	D_ASSERT(owned_index->IsBound() && owned_index->GetIndexType() == ART::TYPE_NAME);
+	if (key_chunk.size() == 0) {
+		return;
+	}
+	unsafe_vector<row_t> rows;
+	ScanRowIds(owned_index->Cast<ART>(), key_chunk, rows);
+	if (auto added_data = deltas.Find(IndexDeltaType::ADDED_DATA)) {
+		ScanRowIds(added_data->Cast<ART>(), key_chunk, rows);
+	}
+	unsafe_vector<row_t> removed_rows;
+	if (auto removed_data = deltas.Find(IndexDeltaType::REMOVED_DATA)) {
+		ScanRowIds(removed_data->Cast<ART>(), key_chunk, removed_rows);
+	}
+	std::sort(removed_rows.begin(), removed_rows.end());
+	for (auto row_id : rows) {
+		if (!std::binary_search(removed_rows.begin(), removed_rows.end(), row_id)) {
+			out.push_back(row_id);
+		}
 	}
 }
 

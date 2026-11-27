@@ -66,8 +66,9 @@ public:
 	void Commit(UndoBuffer::IteratorState &iterator_state, CommitInfo &info);
 	//! Remove the keys of the committed deletes from the indexes: after the commit marker, so never reverted
 	void CommitIndexRemovals(CommitInfo &info);
-	//! Calls the callback for each delete of committed rows of the table
-	void ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback);
+	//! Calls the callback for each delete of committed rows of the table (of every table if none is given)
+	void ScanDeletes(optional_ptr<const DataTableInfo> table_info,
+	                 const std::function<void(DeleteInfo &info)> &callback);
 	//! Revert committed changes made in the UndoBuffer up until the currently committed state
 	void RevertCommit(UndoBuffer::IteratorState &iterator_state, transaction_t transaction_id);
 	//! Rollback the changes made in this UndoBuffer: should be called on

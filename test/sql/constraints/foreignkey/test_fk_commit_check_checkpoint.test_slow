@@ -1,0 +1,87 @@
+# name: test/sql/constraints/foreignkey/test_fk_commit_check_checkpoint.test_slow
+# description: A child of a parent that its transaction deletes is not committed while a checkpoint runs
+# group: [foreignkey]
+
+require skip_reload
+
+statement ok
+SET checkpoint_threshold = '1TB';
+
+statement ok
+ATTACH '{TEST_DIR}/fk_commit_check_checkpoint.db' AS db;
+
+statement ok
+CREATE TABLE db.p (id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE db.c (pid INTEGER REFERENCES p (id));
+
+statement ok
+INSERT INTO db.p VALUES (1);
+
+statement ok
+CHECKPOINT db;
+
+statement ok con_old
+BEGIN;
+
+statement ok con_old
+SELECT * FROM db.p;
+
+statement ok
+INSERT INTO db.p VALUES (100);
+
+statement ok
+SET debug_checkpoint_sleep_ms = 1500;
+
+concurrentloop threadid 0 2
+
+onlyif threadid=0
+statement ok
+CHECKPOINT db;
+
+onlyif threadid=1
+sleep 400 millisecond
+
+onlyif threadid=1
+statement ok
+INSERT INTO db.p VALUES (7);
+
+onlyif threadid=1
+statement ok
+BEGIN;
+
+onlyif threadid=1
+statement ok
+DELETE FROM db.p WHERE id = 7;
+
+# while the checkpoint runs, the statement finds the deleted key in the delta of the checkpoint
+onlyif threadid=1
+statement maybe
+INSERT INTO db.c VALUES (7);
+----
+does not exist in the referenced table
+
+onlyif threadid=1
+statement maybe
+COMMIT;
+----
+<REGEX>:.*(does not exist in the referenced table|aborted).*
+
+endloop
+
+statement ok
+SET debug_checkpoint_sleep_ms = 0;
+
+statement ok con_old
+COMMIT;
+
+query I
+SELECT count(*) FROM db.c WHERE pid NOT IN (SELECT id FROM db.p);
+----
+0
+
+query I
+SELECT count(*) FROM db.p WHERE id = 7;
+----
+1

@@ -214,14 +214,15 @@ void UndoBuffer::CommitIndexRemovals(CommitInfo &info) {
 	remover.Verify();
 }
 
-void UndoBuffer::ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback) {
+void UndoBuffer::ScanDeletes(optional_ptr<const DataTableInfo> table_info,
+                             const std::function<void(DeleteInfo &info)> &callback) {
 	UndoBuffer::IteratorState iterator_state;
 	IterateEntries(iterator_state, [&](UndoFlags type, data_ptr_t data) {
 		if (type != UndoFlags::DELETE_TUPLE) {
 			return;
 		}
 		auto &info = *reinterpret_cast<DeleteInfo *>(data);
-		if (info.table->GetStorage().GetDataTableInfo().get() == &table_info) {
+		if (!table_info || info.table->GetStorage().GetDataTableInfo().get() == table_info.get()) {
 			callback(info);
 		}
 	});

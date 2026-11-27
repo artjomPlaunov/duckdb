@@ -1,6 +1,7 @@
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/transaction_data.hpp"
 #include "duckdb/transaction/commit_state.hpp"
+#include "duckdb/transaction/commit_foreign_keys.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/context.hpp"
@@ -185,9 +186,17 @@ void DuckTransaction::PushSequenceUsage(SequenceCatalogEntry &sequence, const Se
 	}
 }
 
-void DuckTransaction::ScanDeletes(const DataTableInfo &table_info,
+void DuckTransaction::ScanDeletes(optional_ptr<const DataTableInfo> table_info,
                                   const std::function<void(DeleteInfo &info)> &callback) {
 	undo_buffer.ScanDeletes(table_info, callback);
+}
+
+void DuckTransaction::VerifyForeignKeys(ClientContext &context) {
+	if (foreign_keys_verified) {
+		return;
+	}
+	foreign_keys_verified = true;
+	CommitForeignKeyCheck::Verify(context, *this);
 }
 
 ErrorData DuckTransaction::PrepareIndexChanges() noexcept {
@@ -276,6 +285,7 @@ ErrorData DuckTransaction::AppendLocalStorage(ClientContext &context, AttachedDa
 			auto &storage_manager = db.GetStorageManager();
 			commit_state = storage_manager.GenStorageCommitState(*storage_manager.GetWAL());
 		}
+		VerifyForeignKeys(context);
 		auto &profiler = QueryProfiler::Get(context.GetContext());
 		auto commit_timer = profiler.StartTimer<MetricStorageCommitLocalStorageLatency>();
 		storage->Commit(context.GetContext(), commit_state.get());
@@ -334,6 +344,7 @@ ErrorData DuckTransaction::Commit(ClientContext &context, AttachedDatabase &db, 
 
 	ErrorData error_data;
 	try {
+		VerifyForeignKeys(context);
 		storage->Commit(context.GetContext(), commit_state.get());
 		undo_buffer.Commit(iterator_state, commit_info);
 		if (!db.IsSystem() && !db.IsTemporary() && Settings::Get<DebugForceCommitFailureSetting>(db.GetDatabase())) {
