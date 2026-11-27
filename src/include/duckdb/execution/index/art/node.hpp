@@ -40,7 +40,6 @@ enum class GateStatus : uint8_t {
 };
 
 class ART;
-class Prefix;
 class ARTKey;
 class FixedSizeAllocator;
 class OptionalNodePtr;

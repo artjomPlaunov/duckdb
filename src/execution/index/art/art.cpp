@@ -17,7 +17,7 @@
 #include "duckdb/execution/index/art/node256.hpp"
 #include "duckdb/execution/index/art/node256_leaf.hpp"
 #include "duckdb/execution/index/art/node48.hpp"
-#include "duckdb/execution/index/art/prefix.hpp"
+#include "duckdb/execution/index/art/prefix_handle.hpp"
 #include "duckdb/optimizer/matcher/expression_matcher.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -124,7 +124,7 @@ ART::ART(const Identifier &name, const IndexConstraintType index_constraint_type
 	SetPrefixCount(info);
 	if (!allocators) {
 		owns_data = true;
-		auto prefix_size = NumericCast<idx_t>(prefix_count) + NumericCast<idx_t>(Prefix::METADATA_SIZE);
+		auto prefix_size = NumericCast<idx_t>(prefix_count) + NumericCast<idx_t>(PrefixHandle::METADATA_SIZE);
 		auto &block_manager = table_io_manager.GetIndexBlockManager();
 		const auto leaf256_size = GetNode256LeafSegmentSize(info, db.GetStorageManager().GetStorageVersion());
 
@@ -1131,8 +1131,8 @@ void ART::TransformToDeprecated() {
 	auto idx = NodePtr::GetAllocatorIdx(NType::PREFIX);
 	auto &block_manager = (*allocators)[idx]->block_manager;
 	unsafe_unique_ptr<FixedSizeAllocator> deprecated_allocator = nullptr;
-	if (prefix_count != Prefix::DEPRECATED_COUNT) {
-		auto prefix_size = NumericCast<idx_t>(Prefix::DEPRECATED_COUNT) + NumericCast<idx_t>(Prefix::METADATA_SIZE);
+	if (prefix_count != PrefixHandle::DEPRECATED_COUNT) {
+		auto prefix_size = NumericCast<idx_t>(PrefixHandle::DEPRECATED_COUNT) + NumericCast<idx_t>(PrefixHandle::METADATA_SIZE);
 		deprecated_allocator = make_unsafe_uniq<FixedSizeAllocator>(prefix_size, block_manager);
 	}
 
@@ -1147,7 +1147,7 @@ void ART::TransformToDeprecated() {
 	// Replace the prefix allocator with the deprecated allocator.
 	if (state->HasAllocator()) {
 		deprecated_allocator = state->TakeAllocator();
-		prefix_count = Prefix::DEPRECATED_COUNT;
+		prefix_count = PrefixHandle::DEPRECATED_COUNT;
 
 		D_ASSERT((*allocators)[idx]->Empty());
 		(*allocators)[idx]->Reset();
@@ -1185,7 +1185,7 @@ IndexStorageInfo ART::PrepareSerialize(const ARTSerializationFormat target_forma
 		D_ASSERT((*allocators)[NodePtr::GetAllocatorIdx(NType::NODE_15_LEAF)]->Empty());
 		D_ASSERT((*allocators)[NodePtr::GetAllocatorIdx(NType::NODE_256_LEAF)]->Empty());
 		D_ASSERT((*allocators)[NodePtr::GetAllocatorIdx(NType::PREFIX)]->GetSegmentSize() ==
-		         Prefix::DEPRECATED_COUNT + Prefix::METADATA_SIZE);
+		         PrefixHandle::DEPRECATED_COUNT + PrefixHandle::METADATA_SIZE);
 	}
 #endif
 
@@ -1263,12 +1263,12 @@ void ART::Deserialize(const BlockPointer &pointer) {
 
 void ART::SetPrefixCount(const IndexStorageInfo &info) {
 	if (info.IsValid() && info.root_block_ptr.IsValid()) {
-		prefix_count = Prefix::DEPRECATED_COUNT;
+		prefix_count = PrefixHandle::DEPRECATED_COUNT;
 		return;
 	}
 
 	if (info.IsValid()) {
-		auto serialized_count = info.allocator_infos[0].segment_size - Prefix::METADATA_SIZE;
+		auto serialized_count = info.allocator_infos[0].segment_size - PrefixHandle::METADATA_SIZE;
 		prefix_count = NumericCast<uint8_t>(serialized_count);
 		return;
 	}
@@ -1281,7 +1281,7 @@ void ART::SetPrefixCount(const IndexStorageInfo &info) {
 	// Get the maximum possible prefix size.
 	// Minus one to index the prefix count (last byte).
 	auto numeric_max = NumericLimits<uint8_t>().Maximum();
-	uint8_t max_aligned = AlignValueFloor<uint8_t>(numeric_max - Prefix::METADATA_SIZE) - 1;
+	uint8_t max_aligned = AlignValueFloor<uint8_t>(numeric_max - PrefixHandle::METADATA_SIZE) - 1;
 
 	// Ceiling of compound size,
 	// minus one to index the prefix count (last byte).

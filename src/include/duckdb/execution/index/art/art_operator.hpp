@@ -13,7 +13,6 @@
 #include "duckdb/execution/index/art/art.hpp"
 #include "duckdb/execution/index/art/const_prefix_handle.hpp"
 #include "duckdb/execution/index/art/node_handle.hpp"
-#include "duckdb/execution/index/art/prefix.hpp"
 #include "duckdb/execution/index/art/prefix_handle.hpp"
 #include "duckdb/execution/index/art/leaf.hpp"
 #include "duckdb/execution/index/art/base_node.hpp"
@@ -79,15 +78,15 @@ public:
 			case NType::NODE_7_LEAF:
 			case NType::NODE_15_LEAF:
 			case NType::NODE_256_LEAF: {
-				D_ASSERT(depth + 1 == Prefix::ROW_ID_SIZE);
-				const auto byte = rowid[Prefix::ROW_ID_COUNT];
+				D_ASSERT(depth + 1 == PrefixHandle::ROW_ID_SIZE);
+				const auto byte = rowid[PrefixHandle::ROW_ID_COUNT];
 				return current_ptr.HasByte(art, byte);
 			}
 			case NType::NODE_4:
 			case NType::NODE_16:
 			case NType::NODE_48:
 			case NType::NODE_256: {
-				D_ASSERT(depth < Prefix::ROW_ID_SIZE);
+				D_ASSERT(depth < PrefixHandle::ROW_ID_SIZE);
 				auto child_ptr = current_ptr.GetChildNode(art, rowid[depth]);
 				if (child_ptr) {
 					// Continue in the child.
@@ -192,7 +191,7 @@ public:
 			case NType::NODE_15_LEAF:
 			case NType::NODE_256_LEAF: {
 				// Row IDs are unique; there are never any duplicate byte conflicts.
-				auto byte = active_key[Prefix::ROW_ID_COUNT];
+				auto byte = active_key[PrefixHandle::ROW_ID_COUNT];
 				NodePtr::InsertChild(art, active_node_ptr, byte);
 				return ARTConflictType::NO_CONFLICT;
 			}

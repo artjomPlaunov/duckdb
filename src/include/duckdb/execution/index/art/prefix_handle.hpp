@@ -22,7 +22,12 @@ struct PrefixChain;
 class PrefixHandle {
 public:
 	static constexpr NType PREFIX = NType::PREFIX;
+
+	static constexpr uint8_t ROW_ID_SIZE = sizeof(row_t);
+	static constexpr uint8_t ROW_ID_COUNT = ROW_ID_SIZE - 1;
 	static constexpr uint8_t DEPRECATED_COUNT = 15;
+	// The child pointer and the count byte.
+	static constexpr uint8_t METADATA_SIZE = sizeof(NodePtr) + 1;
 
 public:
 	explicit PrefixHandle(NodeHandle &&handle_p) : handle(std::move(handle_p)) {

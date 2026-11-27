@@ -13,7 +13,6 @@
 #include "duckdb/execution/index/art/node256_leaf.hpp"
 #include "duckdb/execution/index/art/node48.hpp"
 #include "duckdb/execution/index/art/const_prefix_handle.hpp"
-#include "duckdb/execution/index/art/prefix.hpp"
 #include "duckdb/execution/index/art/prefix_handle.hpp"
 #include "duckdb/storage/table_io_manager.hpp"
 

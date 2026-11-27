@@ -7,7 +7,7 @@
 #include "duckdb/execution/index/art/const_prefix_handle.hpp"
 #include "duckdb/execution/index/art/node.hpp"
 #include "duckdb/execution/index/art/node_handle.hpp"
-#include "duckdb/execution/index/art/prefix.hpp"
+#include "duckdb/execution/index/art/prefix_handle.hpp"
 
 namespace duckdb {
 
@@ -191,7 +191,7 @@ void Iterator::FindMinimum(NodePtr current_ptr) {
 					if (status == GateStatus::GATE_SET) {
 						row_id[nested_depth] = data[i];
 						nested_depth++;
-						D_ASSERT(nested_depth < Prefix::ROW_ID_SIZE);
+						D_ASSERT(nested_depth < PrefixHandle::ROW_ID_SIZE);
 					}
 				}
 				// Copy the child locator before releasing the prefix handle.
@@ -212,7 +212,7 @@ void Iterator::FindMinimum(NodePtr current_ptr) {
 		if (status == GateStatus::GATE_SET) {
 			row_id[nested_depth] = byte;
 			nested_depth++;
-			D_ASSERT(nested_depth < Prefix::ROW_ID_SIZE);
+			D_ASSERT(nested_depth < PrefixHandle::ROW_ID_SIZE);
 		}
 		nodes.emplace(current_ptr, byte);
 		current_ptr = child_ptr.Get();
@@ -355,7 +355,7 @@ void Iterator::PopNode() {
 		current_key.Pop(1);
 		if (status == GateStatus::GATE_SET) {
 			nested_depth--;
-			D_ASSERT(nested_depth < Prefix::ROW_ID_SIZE);
+			D_ASSERT(nested_depth < PrefixHandle::ROW_ID_SIZE);
 		}
 
 	} else {
@@ -367,7 +367,7 @@ void Iterator::PopNode() {
 
 		if (status == GateStatus::GATE_SET) {
 			nested_depth -= prefix_byte_count;
-			D_ASSERT(nested_depth < Prefix::ROW_ID_SIZE);
+			D_ASSERT(nested_depth < PrefixHandle::ROW_ID_SIZE);
 		}
 	}
 	nodes.pop();

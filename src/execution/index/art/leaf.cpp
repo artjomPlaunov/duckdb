@@ -7,7 +7,6 @@
 #include "duckdb/execution/index/art/base_node.hpp"
 #include "duckdb/execution/index/art/iterator.hpp"
 #include "duckdb/execution/index/art/node.hpp"
-#include "duckdb/execution/index/art/prefix.hpp"
 #include "duckdb/execution/index/art/prefix_handle.hpp"
 #include "duckdb/execution/index/art/art_operator.hpp"
 
@@ -47,7 +46,7 @@ void Leaf::MergeInlined(ArenaAllocator &arena, ART &art, NodePtr &left_ptr, Node
 	auto right_byte = right_key.data[pos];
 
 	NodePtr merged_root_ptr;
-	if (pos == Prefix::ROW_ID_COUNT) {
+	if (pos == PrefixHandle::ROW_ID_COUNT) {
 		// The row IDs differ on the last byte.
 		Node7Leaf::New(art, merged_root_ptr);
 		Node7Leaf::InsertByte(art, merged_root_ptr, left_byte);
