@@ -215,6 +215,9 @@ public:
 	//! Merge a row group collection directly into this table - appending it to the end of the table without copying
 	void MergeStorage(RowGroupCollection &data, optional_ptr<StorageCommitState> commit_state);
 
+	//! References the values of all indexed columns of the deleted rows in table layout (see RowGroupCollection)
+	bool GetIndexedRows(Vector &row_identifiers, idx_t count, optional_ptr<const DeleteIndexValues> index_values,
+	                    DataChunk &fetch_chunk, DataChunk &result_chunk);
 	//! Remove the row identifiers from the indexes of the table added before the bound, with the keys from the
 	//! given indexed column values if they cover every index, else from the fetched rows
 	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,

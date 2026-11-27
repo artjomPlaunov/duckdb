@@ -1390,6 +1390,12 @@ void DataTable::RevertAppend(DuckTransaction &transaction, idx_t start_row, idx_
 //===--------------------------------------------------------------------===//
 // Indexes
 //===--------------------------------------------------------------------===//
+bool DataTable::GetIndexedRows(Vector &row_identifiers, idx_t count, optional_ptr<const DeleteIndexValues> index_values,
+                               DataChunk &fetch_chunk, DataChunk &result_chunk) {
+	return row_groups->GetIndexedRows(info->indexes.GetIndexedColumns(), row_identifiers, count, index_values,
+	                                  fetch_chunk, result_chunk);
+}
+
 void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
                                   IndexRemovalType removal_type, optional_idx active_checkpoint, VisibilityBound bound,
                                   optional_ptr<const DeleteIndexValues> index_values) {

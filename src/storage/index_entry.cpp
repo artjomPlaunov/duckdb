@@ -118,6 +118,18 @@ ErrorData IndexEntry::Append(DataChunk &chunk, Vector &row_ids, const shared_ptr
 	return bound_index.Append(chunk, row_ids, index_append_info);
 }
 
+ErrorData IndexEntry::AppendSwaps(DataChunk &chunk, Vector &row_ids, optional_idx active_checkpoint) {
+	auto entry_lock = lock.GetExclusiveLock();
+	D_ASSERT(!building && owned_index->IsBound() && owned_index->IsUnique());
+	auto &bound_index = owned_index->Cast<BoundIndex>();
+	IndexAppendInfo index_append_info(IndexAppendMode::INSERT_DUPLICATES, nullptr);
+	if (bound_index.SupportsDeltaIndexes() && UseDeltas(active_checkpoint)) {
+		auto &added_data = deltas.GetOrCreate(bound_index, IndexDeltaType::ADDED_DATA);
+		return added_data.Append(chunk, row_ids, index_append_info);
+	}
+	return bound_index.Append(chunk, row_ids, index_append_info);
+}
+
 void IndexEntry::RecordBuildError(std::exception &ex) {
 	ErrorData error(ex);
 	if (Exception::InvalidatesDatabase(error.Type())) {

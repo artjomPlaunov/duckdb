@@ -1141,35 +1141,28 @@ static bool ValuesCoverColumns(const DeleteIndexValues &index_values, const unor
 	return true;
 }
 
-void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes,
-                                           Vector &row_identifiers, idx_t count, IndexRemovalType removal_type,
-                                           optional_idx active_checkpoint, VisibilityBound bound,
-                                           optional_ptr<const DeleteIndexValues> index_values) {
-	// Collect the indexed columns of the indexes we remove from.
-	auto indexed_column_id_set = indexes.GetIndexedColumns(bound);
-	if (indexed_column_id_set.empty()) {
-		// no index was added before this commit
-		return;
+bool RowGroupCollection::GetIndexedRows(const unordered_set<column_t> &indexed_columns, Vector &row_identifiers,
+                                        idx_t count, optional_ptr<const DeleteIndexValues> index_values,
+                                        DataChunk &fetch_chunk, DataChunk &result_chunk) {
+	if (indexed_columns.empty()) {
+		return false;
 	}
-
-	if (index_values && ValuesCoverColumns(*index_values, indexed_column_id_set)) {
-		DataChunk result_chunk;
-		result_chunk.InitializeEmpty(types);
+	result_chunk.InitializeEmpty(types);
+	if (index_values && ValuesCoverColumns(*index_values, indexed_columns)) {
 		for (idx_t j = 0; j < types.size(); j++) {
-			if (indexed_column_id_set.count(j)) {
+			if (indexed_columns.count(j)) {
 				result_chunk.data[j].Reference(index_values->chunk.data[j]);
 				continue;
 			}
 			result_chunk.data[j].Reference(Value(types[j]), count_t(count));
 		}
 		result_chunk.CheckCardinality(count);
-		indexes.RemoveFromIndexes(result_chunk, row_identifiers, removal_type, active_checkpoint, bound);
-		return;
+		return true;
 	}
 
 	// Sorted so that the fetched columns align with the ascending physical order used when
 	// referencing them into result_chunk below.
-	vector<StorageIndex> column_ids {indexed_column_id_set.begin(), indexed_column_id_set.end()};
+	vector<StorageIndex> column_ids {indexed_columns.begin(), indexed_columns.end()};
 	sort(column_ids.begin(), column_ids.end());
 
 	vector<LogicalType> column_types;
@@ -1178,7 +1171,6 @@ void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableInd
 		column_types.push_back(types[col.GetPrimaryIndex()]);
 	}
 
-	DataChunk fetch_chunk;
 	fetch_chunk.Initialize(GetAllocator(), column_types);
 
 	ColumnFetchState state;
@@ -1186,26 +1178,31 @@ void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableInd
 	TransactionData commit_transaction(MAX_TRANSACTION_ID, VisibilityBound::Before(MAX_COMMIT_ID));
 	Fetch(commit_transaction, fetch_chunk, column_ids, row_identifiers, count, state);
 
-	// Used for index value removal.
-	// Contains all columns but only initializes indexed ones.
-	DataChunk result_chunk;
-	auto fetched_columns = vector<bool>(types.size(), false);
-	result_chunk.Initialize(GetAllocator(), types, fetched_columns);
-	// Now set all to-be-fetched columns.
-	for (auto &col : indexed_column_id_set) {
-		fetched_columns[col] = true;
-	}
-
 	// Reference the necessary columns of the fetch_chunk.
 	idx_t fetch_idx = 0;
 	for (idx_t j = 0; j < types.size(); j++) {
-		if (fetched_columns[j]) {
+		if (indexed_columns.count(j)) {
 			result_chunk.data[j].Reference(fetch_chunk.data[fetch_idx++]);
 			continue;
 		}
 		result_chunk.data[j].Reference(Value(types[j]), count_t(fetch_chunk.size()));
 	}
+	result_chunk.CheckCardinality(fetch_chunk.size());
+	return true;
+}
 
+void RowGroupCollection::RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes,
+                                           Vector &row_identifiers, idx_t count, IndexRemovalType removal_type,
+                                           optional_idx active_checkpoint, VisibilityBound bound,
+                                           optional_ptr<const DeleteIndexValues> index_values) {
+	// Collect the indexed columns of the indexes we remove from.
+	auto indexed_column_id_set = indexes.GetIndexedColumns(bound);
+	DataChunk fetch_chunk;
+	DataChunk result_chunk;
+	if (!GetIndexedRows(indexed_column_id_set, row_identifiers, count, index_values, fetch_chunk, result_chunk)) {
+		// no index was added before this commit
+		return;
+	}
 	indexes.RemoveFromIndexes(result_chunk, row_identifiers, removal_type, active_checkpoint, bound);
 }
 

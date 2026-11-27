@@ -1,0 +1,188 @@
+# name: test/sql/index/art/constraints/test_art_commit_swaps.test
+# description: Keys that a transaction deletes and inserts again are swapped at the commit, without the delete indexes
+# group: [constraints]
+
+statement ok
+CREATE TABLE p (id INTEGER PRIMARY KEY, name VARCHAR);
+
+statement ok
+CREATE INDEX p_name ON p (name);
+
+statement ok
+CREATE TABLE c (pid INTEGER REFERENCES p (id), cid INTEGER UNIQUE);
+
+statement ok
+INSERT INTO p SELECT i, 'n' || i FROM range(10000) t(i);
+
+statement ok
+INSERT INTO c SELECT i, i FROM range(0, 10000, 3) t(i);
+
+# delete and re-insert keys across several vectors, with a plain and a foreign key index on the tables
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM p WHERE id BETWEEN 1 AND 5000 AND id % 3 <> 0;
+
+statement ok
+INSERT INTO p SELECT i, 'm' || i FROM range(1, 5001) t(i) WHERE i % 3 <> 0;
+
+statement ok
+DELETE FROM c WHERE cid < 3000;
+
+statement ok
+INSERT INTO c SELECT i, i FROM range(0, 3000, 3) t(i);
+
+statement ok
+COMMIT;
+
+query II
+SELECT count(*), count(DISTINCT id) FROM p;
+----
+10000	10000
+
+query I
+SELECT name FROM p WHERE id = 4999;
+----
+m4999
+
+query I
+SELECT count(*) FROM p WHERE name = 'n4999';
+----
+0
+
+query I
+SELECT count(*) FROM c WHERE pid = 2997;
+----
+1
+
+statement error
+INSERT INTO p VALUES (4999, 'dup');
+----
+<REGEX>:Constraint Error.*Duplicate key "id: 4999".*
+
+statement error
+INSERT INTO c VALUES (0, 2997);
+----
+<REGEX>:Constraint Error.*Duplicate key "cid: 2997".*
+
+# a commit-time collision with the key of another transaction leaves a clean state that can be retried
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM p WHERE id = 7;
+
+statement ok con1
+INSERT INTO p VALUES (7, 'seven'), (20000, 'new');
+
+statement ok con2
+INSERT INTO p VALUES (20000, 'other');
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*PRIMARY KEY or UNIQUE constraint violation: duplicate key "20000".*
+
+query II
+SELECT id, name FROM p WHERE id IN (7, 20000) ORDER BY id;
+----
+7	m7
+20000	other
+
+statement ok
+DELETE FROM p WHERE id = 20000;
+
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM p WHERE id = 7;
+
+statement ok con1
+INSERT INTO p VALUES (7, 'seven'), (20000, 'new');
+
+statement ok con1
+COMMIT;
+
+query II
+SELECT id, name FROM p WHERE id IN (7, 20000) ORDER BY id;
+----
+7	seven
+20000	new
+
+query I
+SELECT id FROM p WHERE name = 'seven';
+----
+7
+
+statement error
+INSERT INTO p VALUES (7, 'dup');
+----
+<REGEX>:Constraint Error.*Duplicate key "id: 7".*
+
+# a deferred primary key whose keys move between rows
+statement ok
+CREATE TABLE d (k INTEGER PRIMARY KEY DEFERRED, v INTEGER);
+
+statement ok
+INSERT INTO d SELECT i, i FROM range(5000) t(i);
+
+statement ok
+UPDATE d SET k = 4999 - k;
+
+query II
+SELECT k, v FROM d WHERE k IN (0, 4999) ORDER BY k;
+----
+0	4999
+4999	0
+
+statement ok
+BEGIN;
+
+statement ok
+UPDATE d SET k = k + 1;
+
+statement ok
+UPDATE d SET k = k - 1;
+
+statement ok
+COMMIT;
+
+query I
+SELECT v FROM d WHERE k = 10;
+----
+4989
+
+statement error
+INSERT INTO d VALUES (10, 0);
+----
+<REGEX>:.*PRIMARY KEY or UNIQUE constraint violation: duplicate key "10".*
+
+# duplicates among the new rows of a deferred key that also replaces a deleted row
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM d WHERE k = 3000;
+
+statement ok
+INSERT INTO d VALUES (3000, -1), (3000, -2);
+
+statement error
+COMMIT;
+----
+Failed to commit: PRIMARY KEY or UNIQUE constraint violation: duplicate key "3000"
+
+query II
+SELECT k, v FROM d WHERE k = 3000;
+----
+3000	1999
+
+statement ok
+INSERT INTO d VALUES (5000, 5000);
+
+query II
+SELECT count(*), count(DISTINCT k) FROM d;
+----
+5001	5001

@@ -200,6 +200,8 @@ public:
 
 	//! Execute the index expressions on an input chunk
 	void ExecuteExpressions(DataChunk &input, DataChunk &result) const;
+	//! Copies the bound index expressions, for an executor that is not shared with other users of the index
+	vector<unique_ptr<Expression>> CopyBoundExpressions() const;
 	static string AppendRowError(DataChunk &input, idx_t index);
 
 	//! Throw a constraint violation exception

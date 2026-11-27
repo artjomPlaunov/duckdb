@@ -96,6 +96,10 @@ public:
 
 	bool ChangesMade();
 	UndoBufferProperties GetUndoProperties();
+	//! Calls the callback for each delete of committed rows of the table
+	void ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback);
+	//! Prepares the changes of the commit to the unique indexes of the tables, before the commit lock is taken
+	ErrorData PrepareIndexChanges() noexcept;
 
 	//! Pushes the undo entry of a delete (DELETE_TUPLE) or of an update's markers (UPDATE_ROWS) in one vector,
 	//! with the indexed column values of the written rows if given

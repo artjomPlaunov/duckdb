@@ -132,6 +132,9 @@ public:
 	//! Appends a chunk using delete indexes and deltas where required.
 	ErrorData Append(DataChunk &chunk, Vector &row_ids, const shared_ptr<IndexEntry> &delete_entry,
 	                 IndexAppendMode append_mode, optional_idx active_checkpoint);
+	//! Appends rows of a commit whose keys belong to rows the transaction deleted: each row id is inserted next to the
+	//! deleted one, without a constraint check.
+	ErrorData AppendSwaps(DataChunk &chunk, Vector &row_ids, optional_idx active_checkpoint);
 	//! Reverts an append to the physical index or its delta.
 	void RevertAppend(DataChunk &chunk, Vector &row_ids);
 	//! Appends deleted rows to the bound physical index if it enforces uniqueness.

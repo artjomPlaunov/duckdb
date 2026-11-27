@@ -80,6 +80,11 @@ public:
 	bool PushDelete(DeleteInfo &info);
 	void Verify();
 	static IndexRemovalType GetCommitRemovalType(ActiveTransactionState transaction_state);
+	//! Writes the row ids of the entry's rows
+	static void GetRowIds(DeleteInfo &info, row_t *row_numbers);
+	//! Reads the indexed column values the entry stores into a chunk in table layout, or returns nullptr
+	static unique_ptr<DeleteIndexValues> ReadIndexValues(DeleteInfo &info, DataTable &version_table,
+	                                                     DataChunk &stored_values, DataChunk &table_values);
 
 private:
 	void Flush(DataTable &table, row_t *row_numbers, idx_t count, optional_ptr<const DeleteIndexValues> index_values);

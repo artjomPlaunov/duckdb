@@ -159,6 +159,11 @@ public:
 	                  optional_ptr<StorageCommitState> commit_state);
 	bool IsPersistent() const;
 
+	//! References the indexed columns of the rows in table layout (the other columns are NULL), from the given
+	//! indexed column values if they cover the columns, else fetched. Returns false if there are no indexed columns.
+	bool GetIndexedRows(const unordered_set<column_t> &indexed_columns, Vector &row_identifiers, idx_t count,
+	                    optional_ptr<const DeleteIndexValues> index_values, DataChunk &fetch_chunk,
+	                    DataChunk &result_chunk);
 	//! Removes the rows from the indexes added before the bound, with the keys from the given indexed column values if
 	//! they cover every such index, else from the fetched rows.
 	void RemoveFromIndexes(const QueryContext &context, TableIndexList &indexes, Vector &row_identifiers, idx_t count,

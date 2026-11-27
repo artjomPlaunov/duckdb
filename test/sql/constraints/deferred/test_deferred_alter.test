@@ -141,7 +141,7 @@ NOT NULL constraint failed
 statement ok
 ROLLBACK;
 
-# FIXME: deletes made before the constraint is added are not in its delete index, so reinserting the key is a false duplicate
+# a key deleted before the deferred constraint is added can be inserted again
 statement ok
 CREATE TABLE deleted_before_alter(i INTEGER);
 
@@ -160,10 +160,42 @@ ALTER TABLE deleted_before_alter ADD UNIQUE(i) DEFERRED;
 statement ok
 INSERT INTO deleted_before_alter VALUES (1);
 
-statement error
+statement ok
 COMMIT;
+
+query I
+SELECT i FROM deleted_before_alter;
+----
+1
+
+statement error
+INSERT INTO deleted_before_alter VALUES (1);
 ----
 Failed to commit: PRIMARY KEY or UNIQUE constraint violation: duplicate key
+
+# FIXME: without DEFERRED, the statement-time check does not know the key was deleted before the constraint was added
+statement ok
+CREATE TABLE deleted_before_immediate_alter(i INTEGER);
+
+statement ok
+INSERT INTO deleted_before_immediate_alter VALUES (1);
+
+statement ok
+BEGIN TRANSACTION;
+
+statement ok
+DELETE FROM deleted_before_immediate_alter WHERE i = 1;
+
+statement ok
+ALTER TABLE deleted_before_immediate_alter ADD UNIQUE(i);
+
+statement error
+INSERT INTO deleted_before_immediate_alter VALUES (1);
+----
+Duplicate key "i: 1" violates unique constraint
+
+statement ok
+ROLLBACK;
 
 # ALTER statements that rebuild the transaction-local storage keep its rows and delete index
 statement ok

@@ -185,6 +185,19 @@ void DuckTransaction::PushSequenceUsage(SequenceCatalogEntry &sequence, const Se
 	}
 }
 
+void DuckTransaction::ScanDeletes(const DataTableInfo &table_info,
+                                  const std::function<void(DeleteInfo &info)> &callback) {
+	undo_buffer.ScanDeletes(table_info, callback);
+}
+
+ErrorData DuckTransaction::PrepareIndexChanges() noexcept {
+	try {
+		return storage->PrepareIndexChanges();
+	} catch (std::exception &ex) {
+		return ErrorData(ex);
+	}
+}
+
 bool DuckTransaction::ChangesMade() {
 	return undo_buffer.ChangesMade() || storage->ChangesMade();
 }

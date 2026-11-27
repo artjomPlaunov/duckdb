@@ -146,6 +146,14 @@ void BoundIndex::ExecuteExpressions(DataChunk &input, DataChunk &result) const {
 	executor.Execute(input, result);
 }
 
+vector<unique_ptr<Expression>> BoundIndex::CopyBoundExpressions() const {
+	vector<unique_ptr<Expression>> result;
+	for (auto &expression : bound_expressions) {
+		result.push_back(expression->Copy());
+	}
+	return result;
+}
+
 idx_t BoundIndex::UnboundExpressionCount() const {
 	return unbound_expressions.size();
 }

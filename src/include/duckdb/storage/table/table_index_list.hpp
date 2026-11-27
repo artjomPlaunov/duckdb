@@ -19,6 +19,7 @@
 
 namespace duckdb {
 
+class CommitIndexChanges;
 class ConflictManager;
 class ConflictInfo;
 class IndexEntry;
@@ -60,6 +61,10 @@ public:
 	void Append(DataChunk &chunk, Vector &row_ids);
 	//! Appends a table chunk with generated row IDs, using delete and checkpoint indexes where required.
 	ErrorData Append(optional_ptr<TableIndexList> delete_indexes, DataChunk &chunk, row_t row_start,
+	                 IndexAppendMode append_mode, optional_idx active_checkpoint);
+	//! Appends a table chunk of a commit with generated row IDs, inserting the prepared swaps next to the deleted rows.
+	//! position is the position of the chunk's first row among the live local rows.
+	ErrorData Append(const CommitIndexChanges &changes, DataChunk &chunk, row_t row_start, idx_t position,
 	                 IndexAppendMode append_mode, optional_idx active_checkpoint);
 	//! Reverts an append to all index entries.
 	void RevertAppend(DataChunk &chunk, Vector &row_ids);

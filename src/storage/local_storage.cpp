@@ -177,7 +177,7 @@ bool LocalTableStorage::IsBulkAppend() const {
 
 ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, RowGroupCollection &source,
                                              TableIndexList &index_list, const vector<LogicalType> &table_types,
-                                             row_t &start_row) {
+                                             row_t &start_row, optional_ptr<const CommitIndexChanges> changes) {
 	// We only scan the indexed columns: mapped_column_ids lists them (sorted for a deterministic order),
 	// and the scan below produces index_chunk in that order, i.e., index_chunk.data[i] holds the data of
 	// the table's physical column mapped_column_ids[i].
@@ -192,23 +192,33 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, RowGr
 
 	// The bound expressions of the indexes (and their bound column references) are in relation to
 	// ALL table columns, so we create an empty table chunk based on the table types. It references
-	// the indexed columns, and contains nothing for all non-indexed columns.
+	// the indexed columns, and NULL for all non-indexed columns.
 	DataChunk table_chunk;
 	table_chunk.InitializeEmpty(table_types);
 
 	ErrorData error;
+	idx_t position = 0;
 	for (auto &index_chunk : source.Chunks(transaction, mapped_column_ids)) {
 		D_ASSERT(index_chunk.ColumnCount() == mapped_column_ids.size());
+		for (idx_t c = 0; c < table_types.size(); c++) {
+			table_chunk.data[c].Reference(Value(table_types[c]), count_t(index_chunk.size()));
+		}
 		for (idx_t i = 0; i < mapped_column_ids.size(); i++) {
 			auto col_id = mapped_column_ids[i].GetPrimaryIndex();
 			table_chunk.data[col_id].Reference(index_chunk.data[i]);
 		}
+		table_chunk.CheckCardinality(index_chunk.size());
 
-		error = index_list.Append(GetDeleteIndexes(), table_chunk, start_row, index_append_mode, checkpoint_id);
+		if (changes) {
+			error = index_list.Append(*changes, table_chunk, start_row, position, index_append_mode, checkpoint_id);
+		} else {
+			error = index_list.Append(GetDeleteIndexes(), table_chunk, start_row, index_append_mode, checkpoint_id);
+		}
 		if (error.HasError()) {
 			break;
 		}
 		start_row += UnsafeNumericCast<row_t>(index_chunk.size());
+		position += index_chunk.size();
 	}
 	return error;
 }
@@ -250,7 +260,13 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 	auto data_table_info = table.GetDataTableInfo();
 	auto &index_list = data_table_info->GetIndexes();
 	auto &collection = *row_groups->collection;
-	auto error = AppendToIndexes(transaction, collection, index_list, table.GetTypes(), append_state.current_row);
+	// prepare the unique indexes added since the changes were prepared: nothing shared is changed yet
+	auto error = index_changes.Prepare(transaction, *this);
+	if (error.HasError()) {
+		return error;
+	}
+	error = AppendToIndexes(transaction, collection, index_list, table.GetTypes(), append_state.current_row,
+	                        &index_changes);
 	if (error.HasError()) {
 		// the failing chunk's keys were already removed; revert the chunks appended before it
 		auto revert_error = RevertAppendToIndexes(transaction, append_state.row_start, append_state.current_row);
@@ -811,6 +827,20 @@ void LocalStorage::Commit(Context &context, optional_ptr<StorageCommitState> com
 		Flush(context, storage->table_ref, *storage, commit_state);
 		entry.second.reset();
 	}
+}
+
+ErrorData LocalStorage::PrepareIndexChanges() {
+	for (auto &storage : table_manager.GetEntries()) {
+		if (storage->is_dropped || !storage->table_ref.get().HasIndexes() ||
+		    storage->GetCollection().GetTotalRows() <= storage->deleted_rows) {
+			continue;
+		}
+		auto error = storage->index_changes.Prepare(transaction, *storage);
+		if (error.HasError()) {
+			return error;
+		}
+	}
+	return ErrorData();
 }
 
 void LocalStorage::Rollback() {

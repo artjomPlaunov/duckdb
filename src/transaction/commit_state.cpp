@@ -96,40 +96,46 @@ bool IndexDataRemover::PushDelete(DeleteInfo &info) {
 		return false;
 	}
 
-	idx_t count = 0;
 	row_t row_numbers[STANDARD_VECTOR_SIZE];
+	GetRowIds(info, row_numbers);
+	DataChunk stored_values;
+	DataChunk table_values;
+	auto index_values = ReadIndexValues(info, version_table, stored_values, table_values);
+	Flush(version_table, row_numbers, info.count, index_values.get());
+	return removal_type == IndexRemovalType::MAIN_INDEX;
+}
+
+void IndexDataRemover::GetRowIds(DeleteInfo &info, row_t *row_numbers) {
 	if (info.is_consecutive) {
 		for (idx_t i = 0; i < info.count; i++) {
-			row_numbers[count++] = UnsafeNumericCast<int64_t>(info.base_row + i);
+			row_numbers[i] = UnsafeNumericCast<int64_t>(info.base_row + i);
 		}
-	} else {
-		auto rows = info.GetRows();
-		for (idx_t i = 0; i < info.count; i++) {
-			row_numbers[count++] = UnsafeNumericCast<int64_t>(info.base_row + rows[i]);
-		}
+		return;
 	}
+	auto rows = info.GetRows();
+	for (idx_t i = 0; i < info.count; i++) {
+		row_numbers[i] = UnsafeNumericCast<int64_t>(info.base_row + rows[i]);
+	}
+}
+
+unique_ptr<DeleteIndexValues> IndexDataRemover::ReadIndexValues(DeleteInfo &info, DataTable &version_table,
+                                                                DataChunk &stored_values, DataChunk &table_values) {
 	if (info.index_values_size == 0) {
-		Flush(version_table, row_numbers, count, nullptr);
-		return removal_type == IndexRemovalType::MAIN_INDEX;
+		return nullptr;
 	}
-	// the delete stored the indexed column values of the rows
 	MemoryStream source(info.GetIndexValues(), info.index_values_size);
 	BinaryDeserializer deserializer(source);
 	deserializer.Begin();
 	auto column_ids = deserializer.ReadProperty<vector<column_t>>(100, "column_ids");
-	DataChunk stored_values;
 	deserializer.ReadObject(101, "values", [&](Deserializer &object) { stored_values.Deserialize(object); });
 	deserializer.End();
-	D_ASSERT(stored_values.size() == count);
+	D_ASSERT(stored_values.size() == info.count);
 
-	DataChunk table_values;
 	table_values.InitializeEmpty(version_table.GetTypes());
 	for (idx_t i = 0; i < column_ids.size(); i++) {
 		table_values.data[column_ids[i]].Reference(stored_values.data[i]);
 	}
-	DeleteIndexValues index_values(table_values, std::move(column_ids));
-	Flush(version_table, row_numbers, count, &index_values);
-	return removal_type == IndexRemovalType::MAIN_INDEX;
+	return make_uniq<DeleteIndexValues>(table_values, std::move(column_ids));
 }
 
 void IndexDataRemover::Verify() {

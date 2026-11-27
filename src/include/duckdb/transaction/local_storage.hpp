@@ -15,6 +15,7 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/query_context.hpp"
 #include "duckdb/common/reference_map.hpp"
+#include "duckdb/transaction/commit_index_changes.hpp"
 
 namespace duckdb {
 class AttachedDatabase;
@@ -92,6 +93,9 @@ public:
 	//! Whether an ALTER of a connection sharing the transaction replaced the storage by the one of the new table
 	atomic<bool> replaced_by_alter {false};
 
+	//! The changes of the commit to the unique indexes of the table
+	CommitIndexChanges index_changes;
+
 	//! Serializes the appends and merges into the primary collection
 	StorageLock append_lock;
 	//! Shared by the users of the primary collection, exclusive while its row groups are replaced by a flush
@@ -122,8 +126,11 @@ public:
 	ErrorData AppendToIndexes(DuckTransaction &transaction, TableAppendState &append_state);
 	//! Appends to the table at commit. A returned error means the table and its indexes were restored.
 	ErrorData AppendToTable(DuckTransaction &transaction, TableAppendState &append_state);
+	//! Appends the rows of source to the indexes: to the shared indexes at commit with the prepared index changes,
+	//! else to the local append indexes
 	ErrorData AppendToIndexes(DuckTransaction &transaction, RowGroupCollection &source, TableIndexList &index_list,
-	                          const vector<LogicalType> &table_types, row_t &start_row);
+	                          const vector<LogicalType> &table_types, row_t &start_row,
+	                          optional_ptr<const CommitIndexChanges> changes = nullptr);
 	//! Removes the rows of this storage that were appended to the indexes of the table at [row_start, row_end)
 	ErrorData RevertAppendToIndexes(DuckTransaction &transaction, row_t row_start, row_t row_end);
 	void AppendToDeleteIndexes(Vector &row_ids, DataChunk &delete_chunk);
@@ -234,6 +241,8 @@ public:
 
 	//! Commits the local storage, writing it to the WAL and completing the commit
 	void Commit(Context &context, optional_ptr<StorageCommitState> commit_state);
+	//! Prepares the changes of the commit to the unique indexes of the tables (see CommitIndexChanges)
+	ErrorData PrepareIndexChanges();
 	//! Rollback the local storage
 	void Rollback();
 

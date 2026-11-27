@@ -132,6 +132,8 @@ UndoBufferProperties UndoBuffer::GetProperties() {
 			if (info->is_consecutive) {
 				properties.estimated_size += sizeof(row_t) * info->count;
 			}
+			// the indexed column values are not written to the WAL
+			properties.estimated_size -= info->index_values_size;
 			properties.has_deletes = true;
 			break;
 		}
@@ -210,6 +212,19 @@ void UndoBuffer::CommitIndexRemovals(CommitInfo &info) {
 		}
 	});
 	remover.Verify();
+}
+
+void UndoBuffer::ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback) {
+	UndoBuffer::IteratorState iterator_state;
+	IterateEntries(iterator_state, [&](UndoFlags type, data_ptr_t data) {
+		if (type != UndoFlags::DELETE_TUPLE) {
+			return;
+		}
+		auto &info = *reinterpret_cast<DeleteInfo *>(data);
+		if (info.table->GetStorage().GetDataTableInfo().get() == &table_info) {
+			callback(info);
+		}
+	});
 }
 
 void UndoBuffer::RevertCommit(UndoBuffer::IteratorState &end_state, transaction_t transaction_id) {
