@@ -357,14 +357,27 @@ ErrorData DuckTransaction::Commit(ClientContext &context, AttachedDatabase &db, 
 			bool sync_now = commit_info.active_transactions == ActiveTransactionState::NO_OTHER_TRANSACTIONS;
 			commit_info.wal_sync_offset = commit_state->FlushCommit(commit_info.commit_id, sync_now);
 		}
-		undo_buffer.CommitIndexRemovals(commit_info);
-		drop_state.FinalizeCommit(manager.Cast<DuckTransactionManager>());
-		return ErrorData();
 	} catch (std::exception &ex) {
 		// Record the error and run RevertCommit() outside this try-catch: RevertCommit() iterates the
 		// undo buffer and may itself throw (e.g. Pin() failing under memory pressure), which would
 		// escape this noexcept function and trigger std::terminate.
 		error_data = ErrorData(ex);
+	}
+
+	if (!error_data.HasError()) {
+		// past the commit marker the commit is final: a failure cannot be reverted and invalidates the database
+		try {
+			undo_buffer.CommitIndexRemovals(commit_info);
+			drop_state.FinalizeCommit(manager.Cast<DuckTransactionManager>());
+			return ErrorData();
+		} catch (std::exception &ex) {
+			error_data = ErrorData(ex);
+			db.Invalidate("finishing a commit after its commit marker failed", error_data.RawMessage());
+		} catch (...) {
+			error_data = ErrorData("unknown error while finishing a commit after its commit marker");
+			db.Invalidate("finishing a commit after its commit marker failed", error_data.RawMessage());
+		}
+		return error_data;
 	}
 
 	try {
