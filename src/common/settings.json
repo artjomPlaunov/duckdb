@@ -356,6 +356,14 @@
         "is_debug": true
     },
     {
+        "name": "debug_commit_index_sort_threshold",
+        "description": "The minimum number of rows a commit appends to a table for its index inserts to be sorted by key first.",
+        "type": "UBIGINT",
+        "default_scope": "global",
+        "default_value": "50000",
+        "is_debug": true
+    },
+    {
         "name": "debug_delta_only_variant_encoding_enabled",
         "description": "Enables the Parquet reader to identify a Variant structurally.",
         "type": "BOOLEAN",

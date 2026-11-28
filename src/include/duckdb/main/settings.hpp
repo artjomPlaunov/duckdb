@@ -796,6 +796,19 @@ struct DebugCheckpointSleepMsSetting {
 	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
 };
 
+struct DebugCommitIndexSortThresholdSetting {
+	using RETURN_TYPE = idx_t;
+	static constexpr const char *Name = "debug_commit_index_sort_threshold";
+	static constexpr const char *Description =
+	    "The minimum number of rows a commit appends to a table for its index inserts to be sorted by key first.";
+	static constexpr const char *InputType = "UBIGINT";
+	static constexpr bool IsDebug = true;
+	static constexpr bool IsDeprecated = false;
+	static constexpr const char *DefaultValue = "50000";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::GLOBAL_DEFAULT;
+	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+};
+
 struct DebugDeltaOnlyVariantEncodingEnabledSetting {
 	using RETURN_TYPE = bool;
 	static constexpr const char *Name = "debug_delta_only_variant_encoding_enabled";

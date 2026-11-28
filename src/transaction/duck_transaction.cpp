@@ -190,9 +190,9 @@ void DuckTransaction::ScanDeletes(const DataTableInfo &table_info,
 	undo_buffer.ScanDeletes(table_info, callback);
 }
 
-ErrorData DuckTransaction::PrepareIndexChanges() noexcept {
+ErrorData DuckTransaction::PrepareIndexChanges(ClientContext &context) noexcept {
 	try {
-		return storage->PrepareIndexChanges();
+		return storage->PrepareIndexChanges(context);
 	} catch (std::exception &ex) {
 		return ErrorData(ex);
 	}

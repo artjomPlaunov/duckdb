@@ -11,6 +11,7 @@
 #include "duckdb/common/types/row/tuple_data_collection.hpp"
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/function/scalar/generic_functions.hpp"
 #include "duckdb/parallel/task_executor.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -40,12 +41,8 @@ Sort::Sort(ClientContext &client_context_p, const vector<BoundOrderByNode> &orde
 		decode_modifiers.push_back(OrderModifiers::Parse(order_modifier));
 	}
 
-	ErrorData error;
-	create_sort_key =
-	    binder.BindScalarFunction(Identifier::DefaultSchema(), "create_sort_key", std::move(create_children), error);
-	if (!create_sort_key) {
-		throw InternalException("Unable to bind create_sort_key in Sort::Sort");
-	}
+	// bound without a catalog lookup: a commit sorts without an active transaction
+	create_sort_key = binder.BindScalarFunction(CreateSortKeyFun::GetFunction(), std::move(create_children));
 
 	auto sort_key_reference =
 	    make_uniq<BoundReferenceExpression>(create_sort_key->GetReturnType(), static_cast<storage_t>(0));

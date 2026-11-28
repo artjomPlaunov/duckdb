@@ -422,7 +422,7 @@ ErrorData DuckTransactionManager::CommitTransaction(ClientContext &context, Tran
 	ErrorData error = transaction.PreFlushOptimisticBlocks(context, db);
 	if (!error.HasError()) {
 		// read-only: decides the swaps and finds duplicate re-inserted keys without any shared lock
-		error = transaction.PrepareIndexChanges();
+		error = transaction.PrepareIndexChanges(context);
 	}
 	unique_lock<mutex> t_lock(transaction_lock);
 	if (!db.IsSystem() && !db.IsTemporary()) {

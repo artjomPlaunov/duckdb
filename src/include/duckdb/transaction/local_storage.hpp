@@ -126,14 +126,22 @@ public:
 	ErrorData AppendToIndexes(DuckTransaction &transaction, TableAppendState &append_state);
 	//! Appends to the table at commit. A returned error means the table and its indexes were restored.
 	ErrorData AppendToTable(DuckTransaction &transaction, TableAppendState &append_state);
-	//! Appends the rows of source to the indexes: to the shared indexes at commit with the prepared index changes,
-	//! else to the local append indexes
 	ErrorData AppendToIndexes(DuckTransaction &transaction, RowGroupCollection &source, TableIndexList &index_list,
-	                          const vector<LogicalType> &table_types, row_t &start_row,
-	                          optional_ptr<const CommitIndexChanges> changes = nullptr);
+	                          const vector<LogicalType> &table_types, row_t &start_row);
 	//! Removes the rows of this storage that were appended to the indexes of the table at [row_start, row_end)
 	ErrorData RevertAppendToIndexes(DuckTransaction &transaction, row_t row_start, row_t row_end);
 	void AppendToDeleteIndexes(Vector &row_ids, DataChunk &delete_chunk);
+	using CommitRowsCallback = std::function<bool(DataChunk &chunk, Vector &row_ids, idx_t position)>;
+	using SortedRowsCallback = std::function<bool(DataChunk &chunk, Vector &row_ids)>;
+	//! Scans the live rows with their commit row ids and positions, until the callback returns false
+	void ScanCommitRows(DuckTransaction &transaction, row_t row_start, const CommitRowsCallback &callback);
+	//! Scans the sorted rows of an index without its swaps, until the callback returns false
+	void ScanSortedRows(const SortedIndexRows &sorted_rows, row_t row_start, const SortedRowsCallback &callback);
+	//! Appends the rows of an index that the commit appends in scan order
+	ErrorData AppendInScanOrder(IndexEntry &entry, DataChunk &chunk, Vector &row_ids, idx_t position,
+	                            optional_idx active_checkpoint);
+	//! Undoes AppendInScanOrder
+	void RevertInScanOrder(IndexEntry &entry, DataChunk &chunk, Vector &row_ids, idx_t position);
 
 	//! Create an optimistic row group collection for this table.
 	//! Returns the index into the optimistic_collections vector for newly created collection.
@@ -241,8 +249,8 @@ public:
 
 	//! Commits the local storage, writing it to the WAL and completing the commit
 	void Commit(Context &context, optional_ptr<StorageCommitState> commit_state);
-	//! Prepares the changes of the commit to the unique indexes of the tables (see CommitIndexChanges)
-	ErrorData PrepareIndexChanges();
+	//! Prepares the changes of the commit to the indexes of the tables (see CommitIndexChanges)
+	ErrorData PrepareIndexChanges(ClientContext &context);
 	//! Rollback the local storage
 	void Rollback();
 

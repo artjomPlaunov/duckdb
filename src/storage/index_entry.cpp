@@ -49,6 +49,10 @@ void IndexEntry::Append(DataChunk &chunk, Vector &row_ids) {
 ErrorData IndexEntry::Append(DataChunk &chunk, Vector &row_ids, const shared_ptr<IndexEntry> &delete_entry,
                              IndexAppendMode append_mode, optional_idx active_checkpoint) {
 	auto entry_lock = lock.GetExclusiveLock();
+	if (bind_state == IndexBindState::RETIRED) {
+		// removed from the list while a commit appends to its snapshot of the list
+		return ErrorData();
+	}
 	if (!owned_index->IsBound()) {
 		auto &unbound_index = owned_index->Cast<UnboundIndex>();
 		unbound_index.BufferChunk(chunk, row_ids, BufferedIndexReplay::INSERT_ENTRY);
@@ -120,6 +124,9 @@ ErrorData IndexEntry::Append(DataChunk &chunk, Vector &row_ids, const shared_ptr
 
 ErrorData IndexEntry::AppendSwaps(DataChunk &chunk, Vector &row_ids, optional_idx active_checkpoint) {
 	auto entry_lock = lock.GetExclusiveLock();
+	if (bind_state == IndexBindState::RETIRED) {
+		return ErrorData();
+	}
 	D_ASSERT(!building && owned_index->IsBound() && owned_index->IsUnique());
 	auto &bound_index = owned_index->Cast<BoundIndex>();
 	IndexAppendInfo index_append_info(IndexAppendMode::INSERT_DUPLICATES, nullptr);
@@ -141,7 +148,7 @@ void IndexEntry::RecordBuildError(std::exception &ex) {
 
 void IndexEntry::RevertAppend(DataChunk &chunk, Vector &row_ids) {
 	auto entry_lock = lock.GetExclusiveLock();
-	if (building && build_error.HasError()) {
+	if (bind_state == IndexBindState::RETIRED || (building && build_error.HasError())) {
 		return;
 	}
 	if (auto delta = deltas.Find(IndexDeltaType::ADDED_DATA)) {

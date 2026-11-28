@@ -177,7 +177,7 @@ bool LocalTableStorage::IsBulkAppend() const {
 
 ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, RowGroupCollection &source,
                                              TableIndexList &index_list, const vector<LogicalType> &table_types,
-                                             row_t &start_row, optional_ptr<const CommitIndexChanges> changes) {
+                                             row_t &start_row) {
 	// We only scan the indexed columns: mapped_column_ids lists them (sorted for a deterministic order),
 	// and the scan below produces index_chunk in that order, i.e., index_chunk.data[i] holds the data of
 	// the table's physical column mapped_column_ids[i].
@@ -197,7 +197,6 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, RowGr
 	table_chunk.InitializeEmpty(table_types);
 
 	ErrorData error;
-	idx_t position = 0;
 	for (auto &index_chunk : source.Chunks(transaction, mapped_column_ids)) {
 		D_ASSERT(index_chunk.ColumnCount() == mapped_column_ids.size());
 		for (idx_t c = 0; c < table_types.size(); c++) {
@@ -209,18 +208,182 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, RowGr
 		}
 		table_chunk.CheckCardinality(index_chunk.size());
 
-		if (changes) {
-			error = index_list.Append(*changes, table_chunk, start_row, position, index_append_mode, checkpoint_id);
-		} else {
-			error = index_list.Append(GetDeleteIndexes(), table_chunk, start_row, index_append_mode, checkpoint_id);
-		}
+		error = index_list.Append(GetDeleteIndexes(), table_chunk, start_row, index_append_mode, checkpoint_id);
 		if (error.HasError()) {
 			break;
 		}
 		start_row += UnsafeNumericCast<row_t>(index_chunk.size());
-		position += index_chunk.size();
 	}
 	return error;
+}
+
+//! Appends the rows of the chunk to the entry, the swaps next to the rows the transaction deleted
+static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, DataChunk &chunk, Vector &row_ids,
+                                 idx_t position, IndexAppendMode append_mode, optional_idx active_checkpoint) {
+	auto &positions = swaps.positions;
+	auto it = std::lower_bound(positions.begin(), positions.end(), position);
+	SelectionVector swap_sel(chunk.size());
+	SelectionVector other_sel(chunk.size());
+	idx_t swap_count = 0;
+	idx_t other_count = 0;
+	for (idx_t i = 0; i < chunk.size(); i++) {
+		if (it != positions.end() && *it == position + i) {
+			swap_sel.set_index(swap_count++, i);
+			it++;
+		} else {
+			other_sel.set_index(other_count++, i);
+		}
+	}
+	if (swap_count == 0) {
+		return entry.Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
+	}
+
+	DataChunk swap_chunk;
+	swap_chunk.InitializeEmpty(chunk.GetTypes());
+	swap_chunk.Slice(chunk, swap_sel, swap_count);
+	Vector swap_row_ids(row_ids, swap_sel, swap_count);
+	auto error = entry.AppendSwaps(swap_chunk, swap_row_ids, active_checkpoint);
+	if (error.HasError() || other_count == 0) {
+		return error;
+	}
+	DataChunk other_chunk;
+	other_chunk.InitializeEmpty(chunk.GetTypes());
+	other_chunk.Slice(chunk, other_sel, other_count);
+	Vector other_row_ids(row_ids, other_sel, other_count);
+	error = entry.Append(other_chunk, other_row_ids, nullptr, append_mode, active_checkpoint);
+	if (error.HasError()) {
+		entry.RevertAppend(swap_chunk, swap_row_ids);
+	}
+	return error;
+}
+
+//! Slices the rows of the chunk that are swaps, returns their count
+static idx_t SliceSwaps(const IndexSwaps &swaps, DataChunk &chunk, Vector &row_ids, idx_t position,
+                        DataChunk &swap_chunk, Vector &swap_row_ids) {
+	auto &positions = swaps.positions;
+	auto it = std::lower_bound(positions.begin(), positions.end(), position);
+	SelectionVector swap_sel(chunk.size());
+	idx_t swap_count = 0;
+	for (; it != positions.end() && *it < position + chunk.size(); it++) {
+		swap_sel.set_index(swap_count++, *it - position);
+	}
+	if (swap_count > 0) {
+		swap_chunk.InitializeEmpty(chunk.GetTypes());
+		swap_chunk.Slice(chunk, swap_sel, swap_count);
+		swap_row_ids.Slice(row_ids, swap_sel, swap_count);
+	}
+	return swap_count;
+}
+
+void LocalTableStorage::ScanCommitRows(DuckTransaction &transaction, row_t row_start,
+                                       const CommitRowsCallback &callback) {
+	auto &table = table_ref.get();
+	auto table_types = table.GetTypes();
+	vector<StorageIndex> column_ids;
+	for (auto &column_id : table.GetDataTableInfo()->GetIndexes().GetIndexedColumns()) {
+		column_ids.emplace_back(column_id);
+	}
+	std::sort(column_ids.begin(), column_ids.end());
+	DataChunk table_chunk;
+	table_chunk.InitializeEmpty(table_types);
+	Vector row_ids(LogicalType::ROW_TYPE);
+	idx_t position = 0;
+	for (auto &index_chunk : GetCollection().Chunks(transaction, column_ids)) {
+		auto count = index_chunk.size();
+		for (idx_t c = 0; c < table_types.size(); c++) {
+			table_chunk.data[c].Reference(Value(table_types[c]), count_t(count));
+		}
+		for (idx_t i = 0; i < column_ids.size(); i++) {
+			table_chunk.data[column_ids[i].GetPrimaryIndex()].Reference(index_chunk.data[i]);
+		}
+		table_chunk.CheckCardinality(count);
+		VectorOperations::GenerateSequence(row_ids, count, row_start + UnsafeNumericCast<row_t>(position), 1);
+		if (!callback(table_chunk, row_ids, position)) {
+			return;
+		}
+		position += count;
+	}
+}
+
+void LocalTableStorage::ScanSortedRows(const SortedIndexRows &sorted_rows, row_t row_start,
+                                       const SortedRowsCallback &callback) {
+	auto table_types = table_ref.get().GetTypes();
+	auto swaps = index_changes.GetSwaps(*sorted_rows.entry);
+	auto &column_ids = sorted_rows.column_ids;
+	DataChunk table_chunk;
+	table_chunk.InitializeEmpty(table_types);
+	Vector row_ids(LogicalType::ROW_TYPE);
+	for (auto &sorted_chunk : sorted_rows.rows->Chunks()) {
+		auto count = sorted_chunk.size();
+		D_ASSERT(sorted_chunk.ColumnCount() == column_ids.size() + 1);
+		for (idx_t c = 0; c < table_types.size(); c++) {
+			table_chunk.data[c].Reference(Value(table_types[c]), count_t(count));
+		}
+		for (idx_t i = 0; i < column_ids.size(); i++) {
+			table_chunk.data[column_ids[i]].Reference(sorted_chunk.data[i]);
+		}
+		table_chunk.CheckCardinality(count);
+		SelectionVector other_sel(count);
+		idx_t other_count = 0;
+		{
+			auto row_positions = sorted_chunk.data.back().Values<uint64_t>();
+			auto writer = FlatVector::Writer<row_t>(row_ids, count);
+			for (idx_t i = 0; i < count; i++) {
+				auto position = index_changes.GetPosition(row_positions[i].GetValue());
+				writer.WriteValue(row_start + UnsafeNumericCast<row_t>(position));
+				if (!swaps || !std::binary_search(swaps->positions.begin(), swaps->positions.end(), position)) {
+					other_sel.set_index(other_count++, i);
+				}
+			}
+		}
+		if (other_count == count) {
+			if (!callback(table_chunk, row_ids)) {
+				return;
+			}
+			continue;
+		}
+		if (other_count == 0) {
+			continue;
+		}
+		// the swaps were appended in scan order
+		DataChunk other_chunk;
+		other_chunk.InitializeEmpty(table_types);
+		other_chunk.Slice(table_chunk, other_sel, other_count);
+		Vector other_row_ids(row_ids, other_sel, other_count);
+		if (!callback(other_chunk, other_row_ids)) {
+			return;
+		}
+	}
+}
+
+ErrorData LocalTableStorage::AppendInScanOrder(IndexEntry &entry, DataChunk &chunk, Vector &row_ids, idx_t position,
+                                               optional_idx active_checkpoint) {
+	auto swaps = index_changes.GetSwaps(entry);
+	if (!index_changes.GetSortedRows(entry)) {
+		if (swaps) {
+			return AppendWithSwaps(entry, *swaps, chunk, row_ids, position, index_append_mode, active_checkpoint);
+		}
+		return entry.Append(chunk, row_ids, nullptr, index_append_mode, active_checkpoint);
+	}
+	DataChunk swap_chunk;
+	Vector swap_row_ids(LogicalType::ROW_TYPE);
+	if (!swaps || SliceSwaps(*swaps, chunk, row_ids, position, swap_chunk, swap_row_ids) == 0) {
+		return ErrorData();
+	}
+	return entry.AppendSwaps(swap_chunk, swap_row_ids, active_checkpoint);
+}
+
+void LocalTableStorage::RevertInScanOrder(IndexEntry &entry, DataChunk &chunk, Vector &row_ids, idx_t position) {
+	auto swaps = index_changes.GetSwaps(entry);
+	if (!index_changes.GetSortedRows(entry)) {
+		entry.RevertAppend(chunk, row_ids);
+		return;
+	}
+	DataChunk swap_chunk;
+	Vector swap_row_ids(LogicalType::ROW_TYPE);
+	if (swaps && SliceSwaps(*swaps, chunk, row_ids, position, swap_chunk, swap_row_ids) > 0) {
+		entry.RevertAppend(swap_chunk, swap_row_ids);
+	}
 }
 
 ErrorData LocalTableStorage::AppendToTable(DuckTransaction &transaction, TableAppendState &append_state) {
@@ -259,21 +422,94 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 	}
 	auto data_table_info = table.GetDataTableInfo();
 	auto &index_list = data_table_info->GetIndexes();
-	auto &collection = *row_groups->collection;
 	// prepare the unique indexes added since the changes were prepared: nothing shared is changed yet
 	auto error = index_changes.Prepare(transaction, *this);
 	if (error.HasError()) {
 		return error;
 	}
-	error = AppendToIndexes(transaction, collection, index_list, table.GetTypes(), append_state.current_row,
-	                        &index_changes);
-	if (error.HasError()) {
-		// the failing chunk's keys were already removed; revert the chunks appended before it
-		auto revert_error = RevertAppendToIndexes(transaction, append_state.row_start, append_state.current_row);
-		if (revert_error.HasError()) {
-			revert_error.Throw();
+	auto checkpoint_id = transaction.GetTransactionManager().Cast<DuckTransactionManager>().GetActiveCheckpoint();
+	auto row_start = append_state.row_start;
+	// a snapshot: an entry removed meanwhile is retired, and appending to it does nothing
+	vector<shared_ptr<IndexEntry>> entries;
+	bool scan_order = false;
+	for (auto entry : index_list.IndexEntries()) {
+		scan_order = scan_order || !index_changes.GetSortedRows(*entry) || index_changes.GetSwaps(*entry);
+		entries.push_back(std::move(entry));
+	}
+
+	// first in scan order: the indexes whose rows were not sorted, and the swaps of the others
+	if (scan_order) {
+		idx_t failed_position = 0;
+		idx_t failed_entry = 0;
+		ScanCommitRows(transaction, row_start, [&](DataChunk &chunk, Vector &row_ids, idx_t position) {
+			for (idx_t i = 0; i < entries.size(); i++) {
+				error = AppendInScanOrder(*entries[i], chunk, row_ids, position, checkpoint_id);
+				if (error.HasError()) {
+					failed_position = position;
+					failed_entry = i;
+					return false;
+				}
+			}
+			return true;
+		});
+		if (error.HasError()) {
+			// the failing append was undone; undo the appends before it
+			ScanCommitRows(transaction, row_start, [&](DataChunk &chunk, Vector &row_ids, idx_t position) {
+				auto entry_count = position < failed_position ? entries.size() : failed_entry;
+				for (idx_t i = 0; i < entry_count; i++) {
+					RevertInScanOrder(*entries[i], chunk, row_ids, position);
+				}
+				return position < failed_position;
+			});
+			return error;
 		}
 	}
+
+	// then the sorted rows of each index in key order
+	for (idx_t i = 0; i < entries.size(); i++) {
+		auto &entry = *entries[i];
+		auto sorted_rows = index_changes.GetSortedRows(entry);
+		if (!sorted_rows) {
+			continue;
+		}
+		idx_t appended = 0;
+		ScanSortedRows(*sorted_rows, row_start, [&](DataChunk &chunk, Vector &row_ids) {
+			error = entry.Append(chunk, row_ids, nullptr, index_append_mode, checkpoint_id);
+			if (error.HasError()) {
+				return false;
+			}
+			appended++;
+			return true;
+		});
+		if (!error.HasError()) {
+			// the sorted rows are not needed to undo a complete append
+			index_changes.ReleaseSortedRows(entry);
+			continue;
+		}
+		idx_t reverted = 0;
+		ScanSortedRows(*sorted_rows, row_start, [&](DataChunk &chunk, Vector &row_ids) {
+			if (reverted == appended) {
+				return false;
+			}
+			entry.RevertAppend(chunk, row_ids);
+			reverted++;
+			return true;
+		});
+		// every row is in the complete indexes, the swaps are in this one and the later sorted ones
+		ScanCommitRows(transaction, row_start, [&](DataChunk &chunk, Vector &row_ids, idx_t position) {
+			for (idx_t j = 0; j < entries.size(); j++) {
+				auto complete = j < i || !index_changes.GetSortedRows(*entries[j]);
+				if (complete) {
+					entries[j]->RevertAppend(chunk, row_ids);
+				} else {
+					RevertInScanOrder(*entries[j], chunk, row_ids, position);
+				}
+			}
+			return true;
+		});
+		return error;
+	}
+	append_state.current_row += UnsafeNumericCast<row_t>(GetCollection().GetTotalRows() - deleted_rows);
 	return error;
 }
 
@@ -829,7 +1065,7 @@ void LocalStorage::Commit(Context &context, optional_ptr<StorageCommitState> com
 	}
 }
 
-ErrorData LocalStorage::PrepareIndexChanges() {
+ErrorData LocalStorage::PrepareIndexChanges(ClientContext &context) {
 	for (auto &storage : table_manager.GetEntries()) {
 		if (storage->is_dropped || !storage->table_ref.get().HasIndexes() ||
 		    storage->GetCollection().GetTotalRows() <= storage->deleted_rows) {
@@ -839,6 +1075,7 @@ ErrorData LocalStorage::PrepareIndexChanges() {
 		if (error.HasError()) {
 			return error;
 		}
+		storage->index_changes.PrepareSorted(context, transaction, *storage);
 	}
 	return ErrorData();
 }

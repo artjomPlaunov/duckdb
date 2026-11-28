@@ -1,0 +1,223 @@
+# name: test/sql/index/art/constraints/test_art_commit_sorted_inserts_failures.test
+# description: A commit that fails during or after its sorted index inserts leaves every index unchanged
+# group: [constraints]
+
+# the forced commit failure crashes the alternative-verify build
+require no_alternative_verify
+
+require skip_reload
+
+load {TEST_DIR}/commit_sorted_inserts_failures.db
+
+statement ok
+SET GLOBAL debug_commit_index_sort_threshold = 0;
+
+statement ok
+CREATE TABLE t (id INTEGER PRIMARY KEY, u INTEGER UNIQUE, k INTEGER);
+
+statement ok
+CREATE INDEX t_k ON t (k);
+
+statement ok
+INSERT INTO t SELECT i, i, i % 10 FROM range(1000) r(i);
+
+# another transaction commits a primary key in the middle of the sorted keys first
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO t SELECT i, i, i % 10 FROM range(1000, 5000) r(i) ORDER BY hash(i);
+
+statement ok con2
+INSERT INTO t VALUES (3000, -1, -1);
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*constraint violation: duplicate key "3000".*
+
+query III
+SELECT count(*), count(*) FILTER (WHERE id >= 1000), max(id) FROM t;
+----
+1001	1	3000
+
+query I
+SELECT count(*) FROM t WHERE id = 4999;
+----
+0
+
+query I
+SELECT count(*) FROM t WHERE u = 1500;
+----
+0
+
+query I
+SELECT count(*) FROM t WHERE k = 3;
+----
+100
+
+# another transaction commits a key of the second unique index: the primary key inserts are removed again
+statement ok con1
+BEGIN;
+
+statement ok con1
+INSERT INTO t SELECT i, i, i % 10 FROM range(5000, 9000) r(i) ORDER BY hash(i);
+
+statement ok con2
+INSERT INTO t VALUES (-2, 7777, -1);
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*constraint violation: duplicate key "7777".*
+
+query I
+SELECT count(*) FROM t WHERE id = 7777;
+----
+0
+
+query I
+SELECT count(*) FROM t WHERE k = 3;
+----
+100
+
+# the same with swaps: keys deleted and inserted again by the failing commit keep their old rows
+statement ok con1
+BEGIN;
+
+statement ok con1
+DELETE FROM t WHERE id BETWEEN 100 AND 199;
+
+statement ok con1
+INSERT INTO t SELECT i, i, -5 FROM range(100, 200) r(i);
+
+statement ok con1
+INSERT INTO t SELECT i, i, i % 10 FROM range(5000, 7000) r(i) ORDER BY hash(i);
+
+statement ok con2
+INSERT INTO t VALUES (-3, 6666, -1);
+
+statement error con1
+COMMIT;
+----
+<REGEX>:.*constraint violation: duplicate key "6666".*
+
+query II
+SELECT count(*), count(*) FILTER (WHERE k = -5) FROM t WHERE id BETWEEN 100 AND 199;
+----
+100	0
+
+query I
+SELECT k FROM t WHERE u = 150;
+----
+0
+
+statement error
+INSERT INTO t VALUES (150, -7, 0);
+----
+<REGEX>:Constraint Error.*Duplicate key.*
+
+# the same rows commit once the colliding rows are gone
+statement ok
+DELETE FROM t WHERE k = -1;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO t SELECT i, i, i % 10 FROM range(1000, 9000) r(i) ORDER BY hash(i);
+
+statement ok
+COMMIT;
+
+query III
+SELECT count(*), count(*) FILTER (WHERE k = 3), max(u) FROM t WHERE k >= 0;
+----
+9000	900	8999
+
+# duplicates among the new rows of a deferred key fail at the commit and leave the index unchanged
+statement ok
+CREATE TABLE d (id INTEGER PRIMARY KEY DEFERRED, k INTEGER);
+
+statement ok
+CREATE INDEX d_k ON d (k);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO d SELECT i % 3000, i FROM range(4000) r(i) ORDER BY hash(i);
+
+statement error
+COMMIT;
+----
+<REGEX>:.*constraint violation: duplicate key.*
+
+query I
+SELECT count(*) FROM d WHERE id = 5;
+----
+0
+
+statement ok
+INSERT INTO d SELECT i, i FROM range(4000) r(i);
+
+query I
+SELECT k FROM d WHERE id = 3500;
+----
+3500
+
+# a forced failure after the index inserts removes them again, with the bulk append and the re-append flush
+statement ok
+SET GLOBAL debug_force_commit_failure = true;
+
+foreach rows 130000 5000
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO t SELECT i, i, i % 10 FROM range(10000, 10000 + {rows}) r(i) ORDER BY hash(i);
+
+statement error
+COMMIT;
+----
+Forced commit failure
+
+query I
+SELECT count(*) FROM t WHERE id = 10003;
+----
+0
+
+endloop
+
+statement ok
+SET GLOBAL debug_force_commit_failure = false;
+
+query III
+SELECT count(*), count(*) FILTER (WHERE k = 3), max(u) FROM t WHERE k >= 0;
+----
+9000	900	8999
+
+foreach rows 130000 5000
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO t SELECT i, i, i % 10 FROM range(200000, 200000 + {rows}) r(i) ORDER BY hash(i);
+
+statement ok
+DELETE FROM t WHERE id >= 200000 AND id % 1000 = 0 AND {rows} = 5000;
+
+statement ok
+COMMIT;
+
+query II
+SELECT u - 199999 = {rows}, k FROM t WHERE id = 200000 + {rows} - 1;
+----
+true	9
+
+statement ok
+DELETE FROM t WHERE id >= 200000;
+
+endloop

@@ -1,0 +1,158 @@
+# name: test/sql/index/art/constraints/test_art_commit_sorted_inserts.test
+# description: A commit inserts its rows into the indexes in key order when they were sorted before the commit lock
+# group: [constraints]
+
+require skip_reload
+
+load {TEST_DIR}/commit_sorted_inserts.db
+
+statement ok
+SET debug_commit_index_sort_threshold = 0;
+
+statement ok
+CREATE TABLE t (id BIGINT PRIMARY KEY, k INTEGER, v VARCHAR);
+
+statement ok
+CREATE INDEX t_k ON t (k);
+
+statement ok
+CREATE UNIQUE INDEX t_v ON t (lower(v));
+
+# random keys in one commit, a plain index with repeated keys
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO t SELECT (hash(i + 1) >> 1)::BIGINT, i % 7, 'r' || i FROM range(20000) r(i);
+
+statement ok
+COMMIT;
+
+query I
+SELECT k FROM t WHERE id = (hash(12346) >> 1)::BIGINT;
+----
+4
+
+query I
+SELECT count(*) FROM t WHERE k = 3;
+----
+2857
+
+query I
+SELECT id = (hash(778) >> 1)::BIGINT FROM t WHERE lower(v) = 'r777';
+----
+true
+
+# dense keys in random order, with local deletes before the commit: the row ids skip the deleted rows
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO t SELECT i, i % 5, 'd' || i FROM range(30000) r(i) ORDER BY hash(i);
+
+statement ok
+DELETE FROM t WHERE id < 30000 AND id % 3 = 0;
+
+statement ok
+COMMIT;
+
+query I
+SELECT count(*) FROM t WHERE id < 30000;
+----
+20000
+
+query II
+SELECT k, v FROM t WHERE id = 29999;
+----
+4	d29999
+
+query I
+SELECT count(*) FROM t WHERE id = 29997;
+----
+0
+
+query I
+SELECT v FROM t WHERE lower(v) = 'd20000';
+----
+d20000
+
+query I
+SELECT count(*) FROM t WHERE k = 2;
+----
+6857
+
+# every key is in the indexes: a re-insert of all rows inserts nothing
+statement ok
+INSERT OR IGNORE INTO t SELECT * FROM t;
+
+query I
+SELECT count(*) FROM t;
+----
+40000
+
+statement error
+INSERT INTO t VALUES (29999, 0, 'other');
+----
+<REGEX>:Constraint Error.*Duplicate key.*
+
+statement error
+INSERT INTO t VALUES (-1, 0, 'D29999');
+----
+<REGEX>:Constraint Error.*Duplicate key.*
+
+# dense keys ascending above the maximum, with swaps of keys deleted in the same transaction
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM t WHERE id BETWEEN 1 AND 100;
+
+statement ok
+INSERT INTO t SELECT i, 6, 'a' || i FROM range(1, 101) r(i) WHERE i % 3 <> 0;
+
+statement ok
+INSERT INTO t SELECT i, 6, 'a' || i FROM range(100000, 110000) r(i);
+
+statement ok
+COMMIT;
+
+query II
+SELECT k, v FROM t WHERE id = 100;
+----
+6	a100
+
+query I
+SELECT count(*) FROM t WHERE k = 6;
+----
+12924
+
+query I
+SELECT count(*) FROM t WHERE lower(v) = 'd100';
+----
+0
+
+statement ok
+INSERT OR IGNORE INTO t SELECT * FROM t;
+
+query I
+SELECT count(*) FROM t;
+----
+50000
+
+# the indexes survive a restart
+restart
+
+query II
+SELECT k, v FROM t WHERE id = 109999;
+----
+6	a109999
+
+query I
+SELECT count(*) FROM t WHERE k = 6;
+----
+12924
+
+statement error
+INSERT INTO t VALUES (50, 0, 'x');
+----
+<REGEX>:Constraint Error.*Duplicate key.*

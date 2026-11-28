@@ -22,8 +22,6 @@
 #include "duckdb/storage/data_table.hpp"
 #include "duckdb/storage/table/data_table_info.hpp"
 #include "duckdb/storage/table/scan_state.hpp"
-#include "duckdb/transaction/commit_index_changes.hpp"
-#include "duckdb/common/algorithm.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include <utility>
 
@@ -196,76 +194,6 @@ ErrorData TableIndexList::Append(optional_ptr<TableIndexList> delete_indexes, Da
 			delete_entry = delete_indexes->FindEntry(*entry);
 		}
 		error = entry->Append(chunk, row_ids, delete_entry, append_mode, active_checkpoint);
-		if (error.HasError()) {
-			break;
-		}
-		already_appended.push_back(entry);
-	}
-
-	if (error.HasError()) {
-		for (auto &entry : already_appended) {
-			entry->RevertAppend(chunk, row_ids);
-		}
-	}
-	return error;
-}
-
-//! Appends the rows of the chunk to the entry, the swaps next to the rows the transaction deleted
-static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, DataChunk &chunk, Vector &row_ids,
-                                 idx_t position, IndexAppendMode append_mode, optional_idx active_checkpoint) {
-	auto &positions = swaps.positions;
-	auto it = std::lower_bound(positions.begin(), positions.end(), position);
-	SelectionVector swap_sel(chunk.size());
-	SelectionVector other_sel(chunk.size());
-	idx_t swap_count = 0;
-	idx_t other_count = 0;
-	for (idx_t i = 0; i < chunk.size(); i++) {
-		if (it != positions.end() && *it == position + i) {
-			swap_sel.set_index(swap_count++, i);
-			it++;
-		} else {
-			other_sel.set_index(other_count++, i);
-		}
-	}
-	if (swap_count == 0) {
-		return entry.Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
-	}
-
-	DataChunk swap_chunk;
-	swap_chunk.InitializeEmpty(chunk.GetTypes());
-	swap_chunk.Slice(chunk, swap_sel, swap_count);
-	Vector swap_row_ids(row_ids, swap_sel, swap_count);
-	auto error = entry.AppendSwaps(swap_chunk, swap_row_ids, active_checkpoint);
-	if (error.HasError() || other_count == 0) {
-		return error;
-	}
-	DataChunk other_chunk;
-	other_chunk.InitializeEmpty(chunk.GetTypes());
-	other_chunk.Slice(chunk, other_sel, other_count);
-	Vector other_row_ids(row_ids, other_sel, other_count);
-	error = entry.Append(other_chunk, other_row_ids, nullptr, append_mode, active_checkpoint);
-	if (error.HasError()) {
-		entry.RevertAppend(swap_chunk, swap_row_ids);
-	}
-	return error;
-}
-
-ErrorData TableIndexList::Append(const CommitIndexChanges &changes, DataChunk &chunk, row_t row_start, idx_t position,
-                                 IndexAppendMode append_mode, optional_idx active_checkpoint) {
-	Vector row_ids(LogicalType::ROW_TYPE);
-	VectorOperations::GenerateSequence(row_ids, chunk.size(), row_start, 1);
-
-	annotated_lock_guard lock(index_entries_lock);
-	vector<shared_ptr<IndexEntry>> already_appended;
-
-	ErrorData error;
-	for (const auto &entry : index_entries) {
-		auto swaps = changes.GetSwaps(*entry);
-		if (swaps) {
-			error = AppendWithSwaps(*entry, *swaps, chunk, row_ids, position, append_mode, active_checkpoint);
-		} else {
-			error = entry->Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
-		}
 		if (error.HasError()) {
 			break;
 		}
