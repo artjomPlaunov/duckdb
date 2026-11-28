@@ -1,4 +1,5 @@
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/common/algorithm.hpp"
 #include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/planner/constraints/bound_not_null_constraint.hpp"
@@ -1491,7 +1492,10 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 	if (count == 0) {
 		return 0;
 	}
-	auto stored_index_values = GetStoredIndexValues(info->indexes, index_values);
+	unique_ptr<DeleteIndexValues> stored_index_values;
+	if (Settings::Get<DebugStoreDeleteIndexValuesSetting>(context)) {
+		stored_index_values = GetStoredIndexValues(info->indexes, index_values);
+	}
 
 	auto &transaction = DuckTransaction::Get(context, db);
 	auto &local_storage = LocalStorage::Get(transaction);

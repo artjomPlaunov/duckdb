@@ -581,6 +581,14 @@
         "is_debug": true
     },
     {
+        "name": "debug_store_delete_index_values",
+        "description": "Store the indexed column values of deleted rows in their undo entries. When disabled, the commit and the cleanup fetch the deleted rows to remove their keys.",
+        "type": "BOOLEAN",
+        "default_scope": "global",
+        "default_value": "true",
+        "is_debug": true
+    },
+    {
         "name": "debug_verification_mode",
         "description": "Toggle the verification mode.",
         "type": "ENUM<DebugVerificationMode>",
