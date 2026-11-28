@@ -13,11 +13,6 @@
 namespace duckdb {
 class TableCatalogEntry;
 
-struct TableDeleteState {
-	unique_ptr<ConstraintState> constraint_state;
-	bool has_delete_constraints = false;
-	DataChunk verify_chunk;
-	vector<StorageIndex> col_ids;
-};
+struct TableDeleteState {};
 
 } // namespace duckdb

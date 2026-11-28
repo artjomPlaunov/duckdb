@@ -37,6 +37,9 @@ public:
 	bool update_is_del_and_insert;
 	//! If the returning statement is present, or transition tables are captured, return the whole chunk
 	bool return_chunk;
+	//! Whether another operator of the plan writes too (e.g. a trigger): then the constraints are verified at the end
+	//! of the operator also in autocommit
+	bool other_writers = false;
 	//! If set, also emit the pre-update (OLD) row image after the NEW image
 	bool capture_old_rows;
 	//! Input-chunk index of each captured OLD physical column, in physical table order (only when capture_old_rows)

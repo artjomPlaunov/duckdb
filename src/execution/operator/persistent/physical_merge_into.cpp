@@ -1,5 +1,9 @@
 #include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
+#include "duckdb/execution/operator/persistent/physical_delete.hpp"
+#include "duckdb/execution/operator/persistent/physical_update.hpp"
+#include "duckdb/execution/operator/persistent/physical_insert.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/storage/data_table.hpp"
 #include "duckdb/parallel/pipeline_broadcast_exchange.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
@@ -572,6 +576,27 @@ SourceResultType PhysicalMergeInto::GetDataInternal(ExecutionContext &context, D
 	if (return_chunk) {
 		// the merge into is only a source if there are no actions that emit any data
 		return SourceResultType::FINISHED;
+	}
+	// the end of the statement: the actions have finished, and their operators are no sources
+	for (auto &action : actions) {
+		if (!action->op) {
+			continue;
+		}
+		auto &op = *action->op;
+		switch (op.type) {
+		case PhysicalOperatorType::INSERT:
+			DataTable::VerifyStatementEnd(context.client, op.sink_state->Cast<InsertGlobalState>().table, false,
+			                              other_writers);
+			break;
+		case PhysicalOperatorType::UPDATE:
+			DataTable::VerifyStatementEnd(context.client, op.Cast<PhysicalUpdate>().tableref, false, other_writers);
+			break;
+		case PhysicalOperatorType::DELETE_OPERATOR:
+			DataTable::VerifyStatementEnd(context.client, op.Cast<PhysicalDelete>().tableref, false, other_writers);
+			break;
+		default:
+			break;
+		}
 	}
 	auto &g = sink_state->Cast<MergeIntoGlobalState>();
 	chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(g.merged_count.load())));

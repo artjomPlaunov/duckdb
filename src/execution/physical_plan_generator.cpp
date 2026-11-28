@@ -1,4 +1,9 @@
 #include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/execution/operator/persistent/physical_insert.hpp"
+#include "duckdb/execution/operator/persistent/physical_batch_insert.hpp"
+#include "duckdb/execution/operator/persistent/physical_update.hpp"
+#include "duckdb/execution/operator/persistent/physical_delete.hpp"
+#include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
@@ -71,9 +76,80 @@ PhysicalPlanGenerator::PhysicalPlanGenerator(ClientContext &context) : context(c
 PhysicalPlanGenerator::~PhysicalPlanGenerator() {
 }
 
+//! Collects the operators that write a table, counting a MERGE INTO and its actions as one writer
+static void CollectWriters(PhysicalOperator &op, vector<reference<PhysicalOperator>> &writers, idx_t &writer_count,
+                           bool &conflict_resolution) {
+	switch (op.type) {
+	case PhysicalOperatorType::INSERT:
+		conflict_resolution = conflict_resolution || op.Cast<PhysicalInsert>().action_type != OnConflictAction::THROW;
+		writer_count++;
+		writers.push_back(op);
+		break;
+	case PhysicalOperatorType::BATCH_INSERT:
+	case PhysicalOperatorType::UPDATE:
+	case PhysicalOperatorType::DELETE_OPERATOR:
+		writer_count++;
+		writers.push_back(op);
+		break;
+	case PhysicalOperatorType::MERGE_INTO: {
+		writer_count++;
+		writers.push_back(op);
+		auto &merge_into = op.Cast<PhysicalMergeInto>();
+		for (auto &action : merge_into.actions) {
+			if (action->op) {
+				writers.push_back(*action->op);
+			}
+		}
+		if (!op.children.empty()) {
+			CollectWriters(op.children[0].get(), writers, writer_count, conflict_resolution);
+		}
+		return;
+	}
+	default:
+		break;
+	}
+	for (auto &child : op.children) {
+		CollectWriters(child.get(), writers, writer_count, conflict_resolution);
+	}
+}
+
+//! Marks the writers of a plan with more than one writer (e.g. a trigger), or with the legacy conflict resolution
+static void MarkOtherWriters(PhysicalOperator &root) {
+	vector<reference<PhysicalOperator>> writers;
+	idx_t writer_count = 0;
+	bool conflict_resolution = false;
+	CollectWriters(root, writers, writer_count, conflict_resolution);
+	if (writer_count <= 1 && !conflict_resolution) {
+		return;
+	}
+	for (auto &writer_ref : writers) {
+		auto &writer = writer_ref.get();
+		switch (writer.type) {
+		case PhysicalOperatorType::INSERT:
+			writer.Cast<PhysicalInsert>().other_writers = true;
+			break;
+		case PhysicalOperatorType::BATCH_INSERT:
+			writer.Cast<PhysicalBatchInsert>().other_writers = true;
+			break;
+		case PhysicalOperatorType::UPDATE:
+			writer.Cast<PhysicalUpdate>().other_writers = true;
+			break;
+		case PhysicalOperatorType::DELETE_OPERATOR:
+			writer.Cast<PhysicalDelete>().other_writers = true;
+			break;
+		case PhysicalOperatorType::MERGE_INTO:
+			writer.Cast<PhysicalMergeInto>().other_writers = true;
+			break;
+		default:
+			break;
+		}
+	}
+}
+
 unique_ptr<PhysicalPlan> PhysicalPlanGenerator::Plan(unique_ptr<LogicalOperator> op) {
 	auto &plan = ResolveAndPlan(*op);
 	plan.Verify();
+	MarkOtherWriters(plan);
 	return std::move(physical_plan);
 }
 

@@ -1104,6 +1104,20 @@ struct DebugSkipCheckpointOnCommitSetting {
 	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
 };
 
+struct DebugStoreDeleteIndexValuesSetting {
+	using RETURN_TYPE = bool;
+	static constexpr const char *Name = "debug_store_delete_index_values";
+	static constexpr const char *Description =
+	    "Store the indexed column values of deleted rows in their undo entries. When disabled, the commit and the "
+	    "cleanup fetch the deleted rows to remove their keys.";
+	static constexpr const char *InputType = "BOOLEAN";
+	static constexpr bool IsDebug = true;
+	static constexpr bool IsDeprecated = false;
+	static constexpr const char *DefaultValue = "true";
+	static constexpr SettingScopeTarget Scope = SettingScopeTarget::GLOBAL_DEFAULT;
+	static constexpr idx_t SettingIndex = NEXT_SETTING_INDEX();
+};
+
 struct DebugVerificationModeSetting {
 	using RETURN_TYPE = DebugVerificationMode;
 	static constexpr const char *Name = "debug_verification_mode";

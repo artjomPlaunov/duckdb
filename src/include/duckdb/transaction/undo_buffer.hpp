@@ -12,6 +12,7 @@
 #include "duckdb/common/enums/undo_flags.hpp"
 #include "duckdb/transaction/undo_buffer_allocator.hpp"
 #include "duckdb/common/enums/active_transaction_state.hpp"
+#include "duckdb/storage/storage_lock.hpp"
 #include <functional>
 
 namespace duckdb {
@@ -26,6 +27,12 @@ struct UndoBufferPointer;
 struct CommitInfo;
 struct DataTableInfo;
 struct DeleteInfo;
+
+//! Where a scan of the delete entries of the undo buffer stopped, to continue from there
+struct UndoScanPosition {
+	optional_ptr<UndoBufferEntry> entry;
+	idx_t offset = 0;
+};
 
 struct UndoBufferProperties {
 	idx_t estimated_size = 0;
@@ -66,8 +73,15 @@ public:
 	void Commit(UndoBuffer::IteratorState &iterator_state, CommitInfo &info);
 	//! Remove the keys of the committed deletes from the indexes: after the commit marker, so never reverted
 	void CommitIndexRemovals(CommitInfo &info);
-	//! Calls the callback for each delete of committed rows of the table
-	void ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback);
+	//! Calls the callback for each delete of committed rows of the table (of every table if none is given), from the
+	//! position on if given, which is then set to the end
+	void ScanDeletes(optional_ptr<const DataTableInfo> table_info,
+	                 const std::function<void(DeleteInfo &info)> &callback,
+	                 optional_ptr<UndoScanPosition> position = nullptr);
+	//! Held while a delete entry is written, so that a scan of a connection sharing the transaction sees whole entries
+	unique_ptr<StorageLockKey> LockDeleteWrite() {
+		return delete_write_lock.GetSharedLock();
+	}
 	//! Revert committed changes made in the UndoBuffer up until the currently committed state
 	void RevertCommit(UndoBuffer::IteratorState &iterator_state, transaction_t transaction_id);
 	//! Rollback the changes made in this UndoBuffer: should be called on
@@ -80,6 +94,8 @@ private:
 	ActiveTransactionState active_transaction_state = ActiveTransactionState::UNSET;
 	//! Number of entries already cleaned up, so that a cleanup that threw part-way can be resumed
 	idx_t cleaned_up_entries = 0;
+	//! Exclusive for a scan of the delete entries, shared while one is written
+	StorageLock delete_write_lock;
 
 private:
 	template <class T>

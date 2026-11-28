@@ -144,6 +144,7 @@ static const ConfigurationOption internal_options[] = {
     DUCKDB_SETTING_CALLBACK(DebugOrderVerificationSetting),
     DUCKDB_SETTING_CALLBACK(DebugPhysicalTableScanExecutionStrategySetting),
     DUCKDB_SETTING(DebugSkipCheckpointOnCommitSetting),
+    DUCKDB_SETTING(DebugStoreDeleteIndexValuesSetting),
     DUCKDB_SETTING_CALLBACK(DebugVerificationModeSetting),
     DUCKDB_SETTING(DebugVerificationProjectionSetting),
     DUCKDB_SETTING(DebugVerifyAggregateStateExportSetting),

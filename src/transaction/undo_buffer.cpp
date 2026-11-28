@@ -214,17 +214,45 @@ void UndoBuffer::CommitIndexRemovals(CommitInfo &info) {
 	remover.Verify();
 }
 
-void UndoBuffer::ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback) {
-	UndoBuffer::IteratorState iterator_state;
-	IterateEntries(iterator_state, [&](UndoFlags type, data_ptr_t data) {
-		if (type != UndoFlags::DELETE_TUPLE) {
-			return;
+void UndoBuffer::ScanDeletes(optional_ptr<const DataTableInfo> table_info,
+                             const std::function<void(DeleteInfo &info)> &callback,
+                             optional_ptr<UndoScanPosition> position) {
+	// connections that share the transaction can write entries meanwhile
+	auto write_key = delete_write_lock.GetExclusiveLock();
+	lock_guard<mutex> guard(allocator.lock);
+	optional_ptr<UndoBufferEntry> current = allocator.tail;
+	idx_t offset = 0;
+	if (position && position->entry) {
+		current = position->entry;
+		offset = position->offset;
+	}
+	optional_ptr<UndoBufferEntry> last;
+	idx_t last_end = 0;
+	while (current) {
+		auto handle = allocator.buffer_manager.Pin(current->block);
+		auto start = handle.GetDataMutable() + offset;
+		auto end = handle.GetDataMutable() + current->position;
+		while (start < end) {
+			auto type = Load<UndoFlags>(start);
+			auto len = Load<uint32_t>(start + sizeof(UndoFlags));
+			auto payload = start + sizeof(UndoFlags) + sizeof(uint32_t);
+			if (type == UndoFlags::DELETE_TUPLE) {
+				auto &info = *reinterpret_cast<DeleteInfo *>(payload);
+				if (!table_info || info.table->GetStorage().GetDataTableInfo().get() == table_info.get()) {
+					callback(info);
+				}
+			}
+			start = payload + len;
 		}
-		auto &info = *reinterpret_cast<DeleteInfo *>(data);
-		if (info.table->GetStorage().GetDataTableInfo().get() == &table_info) {
-			callback(info);
-		}
-	});
+		last = current;
+		last_end = current->position;
+		current = current->prev;
+		offset = 0;
+	}
+	if (position && last) {
+		position->entry = last;
+		position->offset = last_end;
+	}
 }
 
 void UndoBuffer::RevertCommit(UndoBuffer::IteratorState &end_state, transaction_t transaction_id) {

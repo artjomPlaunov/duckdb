@@ -96,8 +96,26 @@ public:
 
 	bool ChangesMade();
 	UndoBufferProperties GetUndoProperties();
-	//! Calls the callback for each delete of committed rows of the table
-	void ScanDeletes(const DataTableInfo &table_info, const std::function<void(DeleteInfo &info)> &callback);
+	//! Calls the callback for each delete of committed rows of the table (of every table if none is given)
+	void ScanDeletes(optional_ptr<const DataTableInfo> table_info,
+	                 const std::function<void(DeleteInfo &info)> &callback,
+	                 optional_ptr<UndoScanPosition> position = nullptr);
+	//! Verifies the foreign keys of the commit, once, under the commit lock before it changes a shared index
+	void VerifyForeignKeys(ClientContext &context);
+	//! A constraint error of the commit is the error of the autocommit statement whose end check it replaces
+	void MarkStatementConstraintError() {
+		statement_constraint_error = true;
+	}
+	bool IsStatementConstraintError() const {
+		return statement_constraint_error && statement_end_skipped;
+	}
+	//! The autocommit statement skipped its end check: the commit verifies its constraints
+	void SkipStatementEnd() {
+		statement_end_skipped = true;
+	}
+	bool StatementEndSkipped() const {
+		return statement_end_skipped;
+	}
 	//! Prepares the changes of the commit to the unique indexes of the tables, before the commit lock is taken
 	ErrorData PrepareIndexChanges(ClientContext &context) noexcept;
 
@@ -147,6 +165,12 @@ private:
 	reference_map_t<SequenceCatalogEntry, reference<SequenceValue>> sequence_usage;
 	//! Flag to prevent auto-checkpointing inside a checkpoint transaction.
 	atomic<bool> is_checkpoint_transaction {false};
+	//! Whether the commit verified the foreign keys already
+	bool foreign_keys_verified = false;
+	//! Whether the commit failed on a constraint that no statement end verified
+	bool statement_constraint_error = false;
+	//! Whether an autocommit statement left its end check to the commit
+	bool statement_end_skipped = false;
 };
 
 } // namespace duckdb

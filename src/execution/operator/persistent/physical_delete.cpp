@@ -34,7 +34,6 @@ public:
 	explicit DeleteGlobalState(ClientContext &context, const vector<LogicalType> &return_types, DuckTableEntry &table,
 	                           const vector<unique_ptr<BoundConstraint>> &bound_constraints, bool return_chunk)
 	    : deleted_count(0), return_collection(context, return_types), has_unique_indexes(false) {
-		// We need to append deletes to the local delete-ART.
 		auto &storage = table.GetStorage();
 		if (storage.HasUniqueIndexes()) {
 			storage.InitializeLocalStorage(delete_index_append_state, table, context, bound_constraints);
@@ -47,8 +46,6 @@ public:
 
 	//! Protects deleted_rows and return_collection Combine()
 	annotated_mutex return_lock;
-	//! Conservatively protect delete-index maintenance (unique indexes)
-	annotated_mutex index_lock;
 
 	atomic<idx_t> deleted_count;
 	ColumnDataCollection return_collection;
@@ -221,14 +218,6 @@ SinkResultType PhysicalDelete::Sink(ExecutionContext &context, DataChunk &chunk,
 		l_state.delete_chunk.Slice(delete_sel, delete_count);
 	}
 
-	// Append the deleted row IDs to the delete indexes.
-	if (g_state.has_unique_indexes && l_state.delete_chunk.size() != 0) {
-		annotated_lock_guard<annotated_mutex> index_guard(g_state.index_lock);
-		auto &local_storage = LocalStorage::Get(context.client, table.db);
-		auto storage = local_storage.GetStorage(table);
-		storage->AppendToDeleteIndexes(delete_row_ids, l_state.delete_chunk);
-	}
-
 	DeleteIndexValues index_values(l_state.delete_chunk, std::move(value_columns));
 	auto deleted =
 	    table.Delete(*l_state.delete_state, context.client, tableref, delete_row_ids, delete_count, &index_values);
@@ -300,6 +289,8 @@ public:
 };
 
 unique_ptr<GlobalSourceState> PhysicalDelete::GetGlobalSourceState(ClientContext &context) const {
+	// the end of the statement: before any row is returned
+	DataTable::VerifyStatementEnd(context, tableref, return_chunk, other_writers);
 	return make_uniq<DeleteSourceState>(*this);
 }
 

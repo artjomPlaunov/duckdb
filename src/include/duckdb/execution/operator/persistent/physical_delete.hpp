@@ -30,6 +30,9 @@ public:
 	vector<unique_ptr<BoundConstraint>> bound_constraints;
 	idx_t row_id_index;
 	bool return_chunk;
+	//! Whether another operator of the plan writes too (e.g. a trigger): then the constraints are verified at the end
+	//! of the operator also in autocommit
+	bool other_writers = false;
 	vector<idx_t> return_columns;
 
 public:

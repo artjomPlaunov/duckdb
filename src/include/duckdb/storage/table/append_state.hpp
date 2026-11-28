@@ -134,6 +134,9 @@ struct LocalAppendState {
 	unique_ptr<ConstraintState> constraint_state;
 	//! Held from InitializeAppend until FinalizeAppend (or until the state is destroyed)
 	unique_ptr<StorageLockKey> append_lock;
+	//! Whether the unique and foreign key constraints are checked and the append indexes maintained per chunk (for
+	//! the legacy ON CONFLICT path, which finds conflicts through the indexes), instead of at the statement end
+	bool eager_constraints = false;
 };
 
 } // namespace duckdb

@@ -80,12 +80,17 @@ CREATE TABLE routes (
 statement ok
 INSERT INTO routes VALUES (1, NULL);
 
-statement error
+# a row can reference itself
+statement ok
 INSERT INTO routes VALUES (2, 2);
+
+statement error
+INSERT INTO routes VALUES (3, 4);
 ----
+Violates foreign key constraint
 
 statement ok
-INSERT INTO routes VALUES (2, 1);
+INSERT INTO routes VALUES (3, 1);
 
 # multi-column primary key constraint
 statement ok

@@ -7,6 +7,7 @@
 #include "duckdb/main/client_data.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
+#include "duckdb/transaction/transaction.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/main/database_manager.hpp"
@@ -119,6 +120,10 @@ void TransactionContext::Commit() {
 		if (Exception::InvalidatesDatabase(error.Type()) || error.Type() == ExceptionType::INTERNAL) {
 			// throw fatal / internal exceptions directly
 			error.Throw();
+		}
+		if (error.ExtraInfo().find(STATEMENT_CONSTRAINT_ERROR) != error.ExtraInfo().end()) {
+			// the commit verified the constraints of the statement, which reports the error as it is
+			throw ConstraintException(error.RawMessage());
 		}
 		throw TransactionException("Failed to commit: %s", error.RawMessage());
 	}

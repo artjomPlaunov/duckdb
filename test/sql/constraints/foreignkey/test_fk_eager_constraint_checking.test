@@ -43,10 +43,12 @@ DETACH fk_db;
 statement ok
 ATTACH '{TEST_DIR}/test_fk_eager.db' AS fk_db;
 
-# Now, we try to update the PK table.
-# The over-eager constraint checking fix is not yet supported for FKs, thus, we throw a constraint violation.
-statement error
+# Now, we update the PK table: the update deletes and inserts the referenced row, which keeps its key.
+statement ok
 UPDATE fk_db.tbl_pk SET payload = {'v': 'new hello', 'i': [7]} WHERE i = 1;
+
+query I
+SELECT payload.v FROM fk_db.tbl_pk WHERE i = 1;
 ----
-<REGEX>:Constraint Error.*Violates foreign key constraint because.*
+new hello
 

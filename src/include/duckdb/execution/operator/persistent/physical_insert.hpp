@@ -94,6 +94,9 @@ public:
 	vector<unique_ptr<BoundConstraint>> bound_constraints;
 	//! If the returning statement is present, return the whole chunk
 	bool return_chunk;
+	//! Whether another operator of the plan writes too (e.g. a trigger): then the constraints are verified at the end
+	//! of the operator also in autocommit
+	bool other_writers = false;
 	//! Table schema, in case of CREATE TABLE AS
 	mutable optional_ptr<SchemaCatalogEntry> schema;
 	//! Create table info, in case of CREATE TABLE AS

@@ -1,6 +1,7 @@
 #include "duckdb/transaction/duck_transaction.hpp"
 #include "duckdb/transaction/transaction_data.hpp"
 #include "duckdb/transaction/commit_state.hpp"
+#include "duckdb/transaction/commit_foreign_keys.hpp"
 #include "duckdb/transaction/duck_transaction_manager.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/context.hpp"
@@ -126,6 +127,7 @@ void DuckTransaction::PushWrite(UndoFlags type, DuckTableEntry &table_entry, Row
 	}
 	auto alloc_size = DeleteInfo::GetAllocationSize(written.count, written.is_consecutive, written.previous_id_count,
 	                                                index_values_size);
+	auto write_key = undo_buffer.LockDeleteWrite();
 
 	auto undo_entry = undo_buffer.CreateEntry(type, alloc_size);
 	auto delete_info = reinterpret_cast<DeleteInfo *>(undo_entry.GetDataMutable());
@@ -185,9 +187,18 @@ void DuckTransaction::PushSequenceUsage(SequenceCatalogEntry &sequence, const Se
 	}
 }
 
-void DuckTransaction::ScanDeletes(const DataTableInfo &table_info,
-                                  const std::function<void(DeleteInfo &info)> &callback) {
-	undo_buffer.ScanDeletes(table_info, callback);
+void DuckTransaction::ScanDeletes(optional_ptr<const DataTableInfo> table_info,
+                                  const std::function<void(DeleteInfo &info)> &callback,
+                                  optional_ptr<UndoScanPosition> position) {
+	undo_buffer.ScanDeletes(table_info, callback, position);
+}
+
+void DuckTransaction::VerifyForeignKeys(ClientContext &context) {
+	if (foreign_keys_verified) {
+		return;
+	}
+	foreign_keys_verified = true;
+	CommitForeignKeyCheck::Verify(context, *this);
 }
 
 ErrorData DuckTransaction::PrepareIndexChanges(ClientContext &context) noexcept {
@@ -276,6 +287,7 @@ ErrorData DuckTransaction::AppendLocalStorage(ClientContext &context, AttachedDa
 			auto &storage_manager = db.GetStorageManager();
 			commit_state = storage_manager.GenStorageCommitState(*storage_manager.GetWAL());
 		}
+		VerifyForeignKeys(context);
 		auto &profiler = QueryProfiler::Get(context.GetContext());
 		auto commit_timer = profiler.StartTimer<MetricStorageCommitLocalStorageLatency>();
 		storage->Commit(context.GetContext(), commit_state.get());
@@ -334,6 +346,7 @@ ErrorData DuckTransaction::Commit(ClientContext &context, AttachedDatabase &db, 
 
 	ErrorData error_data;
 	try {
+		VerifyForeignKeys(context);
 		storage->Commit(context.GetContext(), commit_state.get());
 		undo_buffer.Commit(iterator_state, commit_info);
 		if (!db.IsSystem() && !db.IsTemporary() && Settings::Get<DebugForceCommitFailureSetting>(db.GetDatabase())) {
@@ -346,14 +359,27 @@ ErrorData DuckTransaction::Commit(ClientContext &context, AttachedDatabase &db, 
 			bool sync_now = commit_info.active_transactions == ActiveTransactionState::NO_OTHER_TRANSACTIONS;
 			commit_info.wal_sync_offset = commit_state->FlushCommit(commit_info.commit_id, sync_now);
 		}
-		undo_buffer.CommitIndexRemovals(commit_info);
-		drop_state.FinalizeCommit(manager.Cast<DuckTransactionManager>());
-		return ErrorData();
 	} catch (std::exception &ex) {
 		// Record the error and run RevertCommit() outside this try-catch: RevertCommit() iterates the
 		// undo buffer and may itself throw (e.g. Pin() failing under memory pressure), which would
 		// escape this noexcept function and trigger std::terminate.
 		error_data = ErrorData(ex);
+	}
+
+	if (!error_data.HasError()) {
+		// past the commit marker the commit is final: a failure cannot be reverted and invalidates the database
+		try {
+			undo_buffer.CommitIndexRemovals(commit_info);
+			drop_state.FinalizeCommit(manager.Cast<DuckTransactionManager>());
+			return ErrorData();
+		} catch (std::exception &ex) {
+			error_data = ErrorData(ex);
+			db.Invalidate("finishing a commit after its commit marker failed", error_data.RawMessage());
+		} catch (...) {
+			error_data = ErrorData("unknown error while finishing a commit after its commit marker");
+			db.Invalidate("finishing a commit after its commit marker failed", error_data.RawMessage());
+		}
+		return error_data;
 	}
 
 	try {

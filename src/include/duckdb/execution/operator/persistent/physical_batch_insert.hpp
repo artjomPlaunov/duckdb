@@ -38,6 +38,9 @@ public:
 	unique_ptr<BoundCreateTableInfo> info;
 	//! Preferred input batch size
 	optional_idx preferred_batch_size;
+	//! Whether another operator of the plan writes too (e.g. a trigger): then the constraints are verified at the end
+	//! of the operator also in autocommit
+	bool other_writers = false;
 
 public:
 	// Source interface

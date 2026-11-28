@@ -132,8 +132,17 @@ idx_t LocalTableStorage::EstimatedSize() const {
 		data_size = appended_rows * row_size;
 	}
 
+	// the rows that no statement end checked are not in the append indexes yet: estimate their keys
+	static constexpr idx_t ESTIMATED_KEY_SIZE = 32;
+	idx_t unchecked_rows;
+	{
+		lock_guard<mutex> guard(indexes->check_lock);
+		unchecked_rows = collection.GetTotalRows() - MinValue(indexes->checked_rows, collection.GetTotalRows());
+	}
+	auto unchecked_index_size = unchecked_rows * GetAppendIndexes().CountBuiltIndexes() * ESTIMATED_KEY_SIZE;
+
 	// return the size of the appended rows and the index size
-	return data_size + GetAppendIndexes().GetInMemorySize();
+	return data_size + GetAppendIndexes().GetInMemorySize() + unchecked_index_size;
 }
 
 void LocalTableStorage::WriteNewRowGroup(Context &context, idx_t flushed_row_group_idx) {
@@ -218,8 +227,9 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, RowGr
 }
 
 //! Appends the rows of the chunk to the entry, the swaps next to the rows the transaction deleted
-static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, DataChunk &chunk, Vector &row_ids,
-                                 idx_t position, IndexAppendMode append_mode, optional_idx active_checkpoint) {
+static ErrorData AppendWithSwaps(const CommitIndexChanges &changes, IndexEntry &entry, const IndexSwaps &swaps,
+                                 DataChunk &chunk, Vector &row_ids, idx_t position, IndexAppendMode append_mode,
+                                 optional_idx active_checkpoint) {
 	auto &positions = swaps.positions;
 	auto it = std::lower_bound(positions.begin(), positions.end(), position);
 	SelectionVector swap_sel(chunk.size());
@@ -235,7 +245,11 @@ static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, Dat
 		}
 	}
 	if (swap_count == 0) {
-		return entry.Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
+		auto error = entry.Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
+		if (error.HasError()) {
+			changes.RecordAppendError(entry, error, chunk);
+		}
+		return error;
 	}
 
 	DataChunk swap_chunk;
@@ -252,6 +266,7 @@ static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, Dat
 	Vector other_row_ids(row_ids, other_sel, other_count);
 	error = entry.Append(other_chunk, other_row_ids, nullptr, append_mode, active_checkpoint);
 	if (error.HasError()) {
+		changes.RecordAppendError(entry, error, other_chunk);
 		entry.RevertAppend(swap_chunk, swap_row_ids);
 	}
 	return error;
@@ -361,9 +376,14 @@ ErrorData LocalTableStorage::AppendInScanOrder(IndexEntry &entry, DataChunk &chu
 	auto swaps = index_changes.GetSwaps(entry);
 	if (!index_changes.GetSortedRows(entry)) {
 		if (swaps) {
-			return AppendWithSwaps(entry, *swaps, chunk, row_ids, position, index_append_mode, active_checkpoint);
+			return AppendWithSwaps(index_changes, entry, *swaps, chunk, row_ids, position, index_append_mode,
+			                       active_checkpoint);
 		}
-		return entry.Append(chunk, row_ids, nullptr, index_append_mode, active_checkpoint);
+		auto error = entry.Append(chunk, row_ids, nullptr, index_append_mode, active_checkpoint);
+		if (error.HasError()) {
+			index_changes.RecordAppendError(entry, error, chunk);
+		}
+		return error;
 	}
 	DataChunk swap_chunk;
 	Vector swap_row_ids(LogicalType::ROW_TYPE);
@@ -427,6 +447,15 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 	if (error.HasError()) {
 		return error;
 	}
+	if (transaction.StatementEndSkipped() && !RowsChecked()) {
+		// no statement end checked the rows: the commit checks them, with the errors of a statement
+		error = index_changes.VerifyUncheckedRows(transaction, *this);
+		if (error.HasError()) {
+			transaction.MarkStatementConstraintError();
+			return error;
+		}
+		index_changes.MarkImmediateErrors(append_state.row_start);
+	}
 	auto checkpoint_id = transaction.GetTransactionManager().Cast<DuckTransactionManager>().GetActiveCheckpoint();
 	auto row_start = append_state.row_start;
 	// a snapshot: an entry removed meanwhile is retired, and appending to it does nothing
@@ -461,6 +490,9 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 				}
 				return position < failed_position;
 			});
+			if (index_changes.HasImmediateError()) {
+				transaction.MarkStatementConstraintError();
+			}
 			return error;
 		}
 	}
@@ -476,6 +508,7 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 		ScanSortedRows(*sorted_rows, row_start, [&](DataChunk &chunk, Vector &row_ids) {
 			error = entry.Append(chunk, row_ids, nullptr, index_append_mode, checkpoint_id);
 			if (error.HasError()) {
+				index_changes.RecordAppendError(entry, error, chunk);
 				return false;
 			}
 			appended++;
@@ -507,6 +540,9 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 			}
 			return true;
 		});
+		if (index_changes.HasImmediateError()) {
+			transaction.MarkStatementConstraintError();
+		}
 		return error;
 	}
 	append_state.current_row += UnsafeNumericCast<row_t>(GetCollection().GetTotalRows() - deleted_rows);
@@ -829,7 +865,8 @@ void LocalStorage::Append(LocalAppendState &state, DuckTableEntry &table_entry, 
 	auto offset = NumericCast<idx_t>(MAX_ROW_ID) + storage->GetCollection().GetNextRowId();
 	idx_t base_id = offset + state.append_state.total_append_count;
 
-	if (!storage->GetAppendIndexes().Empty()) {
+	auto &local_indexes = storage->GetLocalIndexes();
+	if (state.eager_constraints && !storage->GetAppendIndexes().Empty()) {
 		auto error =
 		    storage->GetAppendIndexes().Append(storage->GetDeleteIndexes(), table_chunk, NumericCast<row_t>(base_id),
 		                                       storage->index_append_mode, optional_idx());
@@ -840,6 +877,11 @@ void LocalStorage::Append(LocalAppendState &state, DuckTableEntry &table_entry, 
 
 	// Append the chunk to the local storage.
 	auto flushed_row_group_idx = storage->GetCollection().Append(table_chunk, state.append_state);
+	if (state.eager_constraints) {
+		// every earlier row was checked at a statement end, so the append indexes hold all rows
+		lock_guard<mutex> guard(local_indexes.check_lock);
+		local_indexes.checked_rows = base_id + table_chunk.size() - NumericCast<idx_t>(MAX_ROW_ID);
+	}
 
 	// Check if we should pre-emptively flush blocks to disk.
 	if (flushed_row_group_idx.IsValid()) {
@@ -858,15 +900,7 @@ void LocalStorage::LocalMerge(Context &context, DataTable &table, DuckTableEntry
 	auto &storage = *storage_ptr;
 	auto append_lock = storage.LockAppend();
 	storage.table_entry = &table_entry;
-	if (!storage.GetAppendIndexes().Empty()) {
-		// append data to indexes if required
-		row_t base_id = MAX_ROW_ID + NumericCast<row_t>(storage.GetCollection().GetNextRowId());
-		auto error = storage.AppendToIndexes(transaction, *collection.collection, storage.GetAppendIndexes(),
-		                                     table.GetTypes(), base_id);
-		if (error.HasError()) {
-			error.Throw();
-		}
-	}
+	// the append indexes get the rows at the end of the statement
 	auto &target = storage.GetPrimaryCollection();
 	target.MergeStorage(collection);
 }
@@ -927,23 +961,40 @@ idx_t LocalStorage::Delete(Context &context, DataTable &table, DuckTableEntry &t
 	idx_t delete_count =
 	    storage->GetCollection().Delete(TransactionData::Unversioned(), table_entry, ids, count, deleted_ids);
 	storage->deleted_rows += delete_count;
+	vector<row_t> deleted_row_ids;
 	if (!deleted_ids.has_skipped_rows) {
-		// all rows were deleted
-		storage->GetCollection().RemoveFromIndexes(context, storage->GetAppendIndexes(), row_ids, count,
-		                                           IndexRemovalType::MAIN_INDEX_ONLY);
-		return delete_count;
+		deleted_row_ids.assign(ids, ids + count);
+	} else {
+		deleted_row_ids = std::move(deleted_ids.row_ids);
 	}
-	auto &deleted_row_ids = deleted_ids.row_ids;
-	if (!deleted_row_ids.empty()) {
-		Vector deleted_row_id_vector(LogicalType::ROW_TYPE, deleted_row_ids.size());
+	// only the rows checked at a statement end are in the append indexes
+	auto &local_indexes = storage->GetLocalIndexes();
+	row_t checked_end;
+	{
+		lock_guard<mutex> guard(local_indexes.check_lock);
+		checked_end = MAX_ROW_ID + NumericCast<row_t>(local_indexes.checked_rows);
+	}
+	idx_t indexed_count = 0;
+	for (auto row_id : deleted_row_ids) {
+		if (row_id < checked_end) {
+			deleted_row_ids[indexed_count++] = row_id;
+		}
+	}
+	if (indexed_count > 0) {
+		lock_guard<mutex> guard(local_indexes.check_lock);
+		local_indexes.removed_local_rows.insert(local_indexes.removed_local_rows.end(), deleted_row_ids.begin(),
+		                                        deleted_row_ids.begin() + NumericCast<int64_t>(indexed_count));
+	}
+	if (indexed_count > 0) {
+		Vector deleted_row_id_vector(LogicalType::ROW_TYPE, indexed_count);
 		{
-			auto writer = FlatVector::Writer<row_t>(deleted_row_id_vector, deleted_row_ids.size());
-			for (auto &row_id : deleted_row_ids) {
-				writer.WriteValue(row_id);
+			auto writer = FlatVector::Writer<row_t>(deleted_row_id_vector, indexed_count);
+			for (idx_t i = 0; i < indexed_count; i++) {
+				writer.WriteValue(deleted_row_ids[i]);
 			}
 		}
 		storage->GetCollection().RemoveFromIndexes(context, storage->GetAppendIndexes(), deleted_row_id_vector,
-		                                           deleted_row_ids.size(), IndexRemovalType::MAIN_INDEX_ONLY);
+		                                           indexed_count, IndexRemovalType::MAIN_INDEX_ONLY);
 	}
 	return delete_count;
 }
@@ -993,6 +1044,9 @@ void LocalStorage::Flush(Context &context, DataTable &table, LocalTableStorage &
 			if (!error.HasError()) {
 				// finally move over the row groups
 				table.MergeStorage(storage.GetCollection(), commit_state);
+			} else {
+				// the row groups stay with this storage: free their blocks
+				storage.Rollback();
 			}
 		} else {
 			// check if we have written data
@@ -1063,6 +1117,11 @@ void LocalStorage::Commit(Context &context, optional_ptr<StorageCommitState> com
 		Flush(context, storage->table_ref, *storage, commit_state);
 		entry.second.reset();
 	}
+}
+
+bool LocalTableStorage::RowsChecked() const {
+	lock_guard<mutex> guard(indexes->check_lock);
+	return indexes->checked_rows == row_groups->collection->GetTotalRows();
 }
 
 ErrorData LocalStorage::PrepareIndexChanges(ClientContext &context) {
@@ -1213,6 +1272,10 @@ TableIndexList &LocalStorage::GetIndexes(Context &context, DataTable &table) {
 
 shared_ptr<LocalTableStorage> LocalStorage::GetStorage(const DataTable &table) {
 	return table_manager.GetStorage(table);
+}
+
+shared_ptr<LocalTableStorage> LocalStorage::GetOrCreateStorage(Context &context, DataTable &table) {
+	return table_manager.GetOrCreateStorage(context, table);
 }
 
 void LocalStorage::VerifyNewConstraint(Context &context, DataTable &parent, const BoundConstraint &constraint) {

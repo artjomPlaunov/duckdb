@@ -297,7 +297,7 @@ static idx_t PerformOnConflictAction(InsertLocalState &lstate, InsertGlobalState
 	if (!op.parallel && op.return_chunk) {
 		gstate.return_collection.Append(append_chunk);
 	}
-	data_table.LocalAppend(table, context.client, append_chunk, op.bound_constraints, row_ids, append_chunk);
+	data_table.LocalAppend(table, context.client, append_chunk, op.bound_constraints, row_ids, append_chunk, true);
 	return update_chunk.size();
 }
 
@@ -417,7 +417,7 @@ static void VerifyOnConflictCondition(ExecutionContext &context, DataChunk &comb
 
 	// Verify and throw.
 	if (GLOBAL) {
-		data_table.VerifyAppendConstraints(constraint_state, context.client, combined_chunk, nullptr, nullptr);
+		data_table.VerifyAppendConstraints(constraint_state, context.client, combined_chunk, nullptr, nullptr, true);
 		throw InternalException("VerifyAppendConstraints was expected to throw but didn't");
 	}
 
@@ -442,7 +442,7 @@ static idx_t HandleInsertConflicts(DuckTableEntry &table, ExecutionContext &cont
 	auto storage = local_storage.GetStorage(data_table);
 	if (GLOBAL) {
 		auto &constraint_state = lstate.GetConstraintState(data_table, table);
-		data_table.VerifyAppendConstraints(constraint_state, context.client, tuples, storage, &conflict_manager);
+		data_table.VerifyAppendConstraints(constraint_state, context.client, tuples, storage, &conflict_manager, true);
 	} else {
 		auto &indexes = local_storage.GetIndexes(context.client.GetContext(), data_table);
 		indexes.VerifyUniqueIndexes(storage ? &storage->GetDeleteIndexes() : nullptr, tuples, &conflict_manager);
@@ -523,7 +523,7 @@ idx_t PhysicalInsert::OnConflictHandling(DuckTableEntry &table, ExecutionContext
 	if (action_type == OnConflictAction::THROW) {
 		auto &constraint_state = lstate.GetConstraintState(data_table, table);
 		auto storage = local_storage.GetStorage(data_table);
-		data_table.VerifyAppendConstraints(constraint_state, context.client, insert_chunk, storage, nullptr);
+		data_table.VerifyAppendConstraints(constraint_state, context.client, insert_chunk, storage, nullptr, false);
 		return 0;
 	}
 
@@ -620,7 +620,7 @@ SinkResultType PhysicalInsert::Sink(ExecutionContext &context, DataChunk &insert
 		}
 		// When action_type is throw, we already verify constraints in `OnConflictHandling`
 		storage.LocalAppend(table, context.client, insert_chunk, bound_constraints,
-		                    action_type == OnConflictAction::THROW);
+		                    action_type == OnConflictAction::THROW, action_type != OnConflictAction::THROW);
 		if (action_type == OnConflictAction::UPDATE && lstate.update_chunk.size() != 0) {
 			(void)HandleInsertConflicts<true>(table, context, lstate, gstate, lstate.update_chunk, *this);
 			(void)HandleInsertConflicts<false>(table, context, lstate, gstate, lstate.update_chunk, *this);
@@ -845,6 +845,8 @@ public:
 };
 
 unique_ptr<GlobalSourceState> PhysicalInsert::GetGlobalSourceState(ClientContext &context) const {
+	// the end of the statement: before any row is returned
+	DataTable::VerifyStatementEnd(context, sink_state->Cast<InsertGlobalState>().table, return_chunk, other_writers);
 	return make_uniq<InsertSourceState>(*this);
 }
 

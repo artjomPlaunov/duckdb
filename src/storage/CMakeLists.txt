@@ -19,6 +19,7 @@ add_library_unity(
   database_handle.cpp
   data_pointer.cpp
   data_table.cpp
+  data_table_statement_check.cpp
   index_entry.cpp
   index.cpp
   local_storage.cpp

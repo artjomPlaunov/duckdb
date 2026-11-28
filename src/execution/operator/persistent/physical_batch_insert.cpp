@@ -480,7 +480,7 @@ SinkResultType PhysicalBatchInsert::Sink(ExecutionContext &context, DataChunk &i
 	auto &local_storage = LocalStorage::Get(context.client, storage.db);
 	auto local_table_storage = local_storage.GetStorage(table.GetStorage());
 	storage.VerifyAppendConstraints(*lstate.constraint_state, context.client, insert_chunk, local_table_storage,
-	                                nullptr);
+	                                nullptr, false);
 
 	auto &optimistic_collection = table.GetStorage().GetOptimisticCollection(context.client, lstate.collection_index);
 	auto &collection = *optimistic_collection.collection;
@@ -629,6 +629,7 @@ SinkFinalizeType PhysicalBatchInsert::Finalize(Pipeline &pipeline, Event &event,
 SourceResultType PhysicalBatchInsert::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                       OperatorSourceInput &input) const {
 	auto &insert_gstate = sink_state->Cast<BatchInsertGlobalState>();
+	DataTable::VerifyStatementEnd(context.client, insert_gstate.table, false, other_writers);
 
 	chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(insert_gstate.insert_count)));
 

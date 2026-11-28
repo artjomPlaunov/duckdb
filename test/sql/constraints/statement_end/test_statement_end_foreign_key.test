@@ -1,0 +1,263 @@
+# name: test/sql/constraints/statement_end/test_statement_end_foreign_key.test
+# description: Foreign keys are checked at the end of a statement, against the statement's own changes too
+# group: [statement_end]
+
+statement ok
+CREATE TABLE p (id INTEGER PRIMARY KEY, name VARCHAR, arr INTEGER[], tag INTEGER, CHECK (id + tag >= 0));
+
+statement ok
+CREATE INDEX p_tag ON p (tag);
+
+statement ok
+CREATE TABLE c (pid INTEGER REFERENCES p (id));
+
+statement ok
+INSERT INTO p SELECT i, 'n' || i, [i], i FROM range(10) t(i);
+
+statement ok
+INSERT INTO c VALUES (1), (2), (3);
+
+# updates of referenced rows that keep their key run as delete and insert
+statement ok
+UPDATE p SET arr = [42] WHERE id = 1;
+
+statement ok
+UPDATE p SET tag = tag + 1 WHERE id = 2;
+
+statement ok
+UPDATE p SET id = id WHERE id = 3;
+
+query II
+UPDATE p SET name = 'r' || id WHERE id = 1 RETURNING id, name;
+----
+1	r1
+
+statement ok
+UPDATE p SET tag = 5 WHERE id IN (1, 2, 3);
+
+statement ok
+INSERT OR REPLACE INTO p VALUES (1, 'replaced', [1], 1);
+
+statement ok
+INSERT INTO p VALUES (2, 'upserted', [2], 2) ON CONFLICT DO UPDATE SET arr = excluded.arr;
+
+statement ok
+MERGE INTO p USING (SELECT 3 AS id) s ON p.id = s.id WHEN MATCHED THEN UPDATE SET arr = [300];
+
+# a permutation of referenced keys
+statement ok
+UPDATE p SET id = CASE id WHEN 1 THEN 2 WHEN 2 THEN 1 ELSE id END WHERE id IN (1, 2);
+
+query II
+SELECT id, name FROM p WHERE id IN (1, 2) ORDER BY id;
+----
+1	n2
+2	replaced
+
+# a referenced key that goes away is still an error, at the statement
+statement error
+UPDATE p SET id = 20 WHERE id = 3;
+----
+<REGEX>:Constraint Error: Violates foreign key constraint because key "pid: 3" is still referenced.*
+
+statement error
+DELETE FROM p WHERE id = 1;
+----
+<REGEX>:Constraint Error: Violates foreign key constraint because key "pid: 1" is still referenced.*
+
+statement error
+INSERT INTO c VALUES (11);
+----
+<REGEX>:Constraint Error: Violates foreign key constraint because key "id: 11" does not exist in the referenced table.*
+
+statement ok
+BEGIN;
+
+statement error
+INSERT INTO c VALUES (11);
+----
+<REGEX>:Constraint Error: Violates foreign key constraint because key "id: 11" does not exist in the referenced table.*
+
+statement ok
+ROLLBACK;
+
+# deleting the children and then their parent in one transaction
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM c WHERE pid = 1;
+
+statement ok
+DELETE FROM p WHERE id = 1;
+
+statement ok
+COMMIT;
+
+# and in one statement, with a trigger that deletes the children first
+statement ok
+CREATE TRIGGER delete_children BEFORE DELETE ON p DELETE FROM c WHERE pid = 2;
+
+statement ok
+DELETE FROM p WHERE id = 2;
+
+statement ok
+DROP TRIGGER delete_children ON p;
+
+query I
+SELECT count(*) FROM c WHERE pid NOT IN (SELECT id FROM p);
+----
+0
+
+# self-references in one INSERT
+statement ok
+CREATE TABLE s (id INTEGER PRIMARY KEY, parent INTEGER REFERENCES s (id));
+
+statement ok
+INSERT INTO s VALUES (1, NULL), (2, 1), (3, 2), (4, 4);
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO s VALUES (6, 5), (5, 1);
+
+statement ok
+COMMIT;
+
+statement error
+INSERT INTO s VALUES (7, 8);
+----
+<REGEX>:Constraint Error: Violates foreign key constraint because key "id: 8" does not exist in the referenced table.*
+
+statement ok
+SET preserve_insertion_order = false;
+
+statement ok
+SET threads = 4;
+
+statement ok
+INSERT INTO s SELECT i, CASE WHEN i % 2 = 0 THEN i + 1 ELSE i - 1 END FROM range(1000, 300000) t(i);
+
+query I
+SELECT count(*) FROM s WHERE parent NOT IN (SELECT id FROM s);
+----
+0
+
+statement ok
+RESET preserve_insertion_order;
+
+statement ok
+RESET threads;
+
+# TRUNCATE and COPY FROM DATABASE of a self-referencing table
+statement ok
+ATTACH ':memory:' AS copy_db;
+
+statement ok
+COPY FROM DATABASE memory TO copy_db;
+
+query I
+SELECT count(*) FROM copy_db.s;
+----
+299006
+
+statement ok
+TRUNCATE s;
+
+query I
+SELECT count(*) FROM s;
+----
+0
+
+# an autocommit INSERT whose trigger runs an INSERT ... ON CONFLICT (a trigger on the same table would be recursive)
+statement ok
+CREATE TABLE u (id INTEGER PRIMARY KEY, v INTEGER);
+
+statement ok
+CREATE TABLE a (id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TRIGGER also_insert AFTER INSERT ON a INSERT INTO u VALUES (100, 0), (100, 1) ON CONFLICT DO NOTHING;
+
+statement ok
+INSERT INTO a VALUES (1);
+
+statement ok
+INSERT INTO a VALUES (2);
+
+statement error
+INSERT INTO a VALUES (2);
+----
+<REGEX>:Constraint Error: Duplicate key "id: 2" violates primary key constraint.*
+
+query II
+SELECT id, v FROM u ORDER BY id;
+----
+100	0
+
+# deleting a parent row of the transaction that a child row of the transaction references
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO p VALUES (50, 'local', [], 0);
+
+statement ok
+INSERT INTO c VALUES (50);
+
+statement error
+DELETE FROM p WHERE id = 50;
+----
+<REGEX>:Constraint Error: Violates foreign key constraint because key "pid: 50" is still referenced.*
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO p VALUES (51, 'local', [], 0);
+
+statement ok
+INSERT INTO c VALUES (51);
+
+statement ok
+DELETE FROM c WHERE pid = 51;
+
+statement ok
+DELETE FROM p WHERE id = 51;
+
+statement ok
+COMMIT;
+
+# a child table dropped after the transaction deleted a parent row
+statement ok
+CREATE TABLE p2 (id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE c2 (pid INTEGER REFERENCES p2 (id));
+
+statement ok
+INSERT INTO p2 VALUES (1), (2);
+
+statement ok
+INSERT INTO c2 VALUES (2);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM p2 WHERE id = 1;
+
+statement ok
+DROP TABLE c2;
+
+statement ok
+COMMIT;
+
+query I
+SELECT id FROM p2;
+----
+2

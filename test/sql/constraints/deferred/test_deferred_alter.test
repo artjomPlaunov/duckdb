@@ -173,7 +173,7 @@ INSERT INTO deleted_before_alter VALUES (1);
 ----
 Failed to commit: PRIMARY KEY or UNIQUE constraint violation: duplicate key
 
-# FIXME: without DEFERRED, the statement-time check does not know the key was deleted before the constraint was added
+# the same without DEFERRED: the statement-end check knows the key was deleted before the constraint was added
 statement ok
 CREATE TABLE deleted_before_immediate_alter(i INTEGER);
 
@@ -189,13 +189,21 @@ DELETE FROM deleted_before_immediate_alter WHERE i = 1;
 statement ok
 ALTER TABLE deleted_before_immediate_alter ADD UNIQUE(i);
 
+statement ok
+INSERT INTO deleted_before_immediate_alter VALUES (1);
+
+statement ok
+COMMIT;
+
+query I
+SELECT i FROM deleted_before_immediate_alter;
+----
+1
+
 statement error
 INSERT INTO deleted_before_immediate_alter VALUES (1);
 ----
 Duplicate key "i: 1" violates unique constraint
-
-statement ok
-ROLLBACK;
 
 # ALTER statements that rebuild the transaction-local storage keep its rows and delete index
 statement ok

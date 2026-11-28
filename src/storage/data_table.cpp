@@ -1,4 +1,5 @@
 #include "duckdb/storage/data_table.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/common/algorithm.hpp"
 #include "duckdb/transaction/delete_info.hpp"
 #include "duckdb/planner/constraints/bound_not_null_constraint.hpp"
@@ -914,12 +915,6 @@ void DataTable::VerifyAppendForeignKeyConstraint(optional_ptr<LocalTableStorage>
 	VerifyForeignKeyConstraint(storage, bound_foreign_key, context, chunk, VerifyExistenceType::APPEND_FK);
 }
 
-void DataTable::VerifyDeleteForeignKeyConstraint(optional_ptr<LocalTableStorage> storage,
-                                                 const BoundForeignKeyConstraint &bound_foreign_key,
-                                                 ClientContext &context, DataChunk &chunk) {
-	VerifyForeignKeyConstraint(storage, bound_foreign_key, context, chunk, VerifyExistenceType::DELETE_FK);
-}
-
 void DataTable::VerifyNewConstraint(ClientContext &context, LocalStorage &local_storage, DataTable &parent,
                                     const BoundConstraint &constraint) {
 	if (constraint.type != ConstraintType::NOT_NULL) {
@@ -931,8 +926,8 @@ void DataTable::VerifyNewConstraint(ClientContext &context, LocalStorage &local_
 }
 
 void DataTable::VerifyAppendConstraints(ConstraintState &constraint_state, ClientContext &context, DataChunk &chunk,
-                                        optional_ptr<LocalTableStorage> storage,
-                                        optional_ptr<ConflictManager> manager) {
+                                        optional_ptr<LocalTableStorage> storage, optional_ptr<ConflictManager> manager,
+                                        bool verify_keys) {
 	auto &table = constraint_state.table;
 	if (table.HasGeneratedColumns()) {
 		// Verify the generated columns against the inserted values.
@@ -951,7 +946,7 @@ void DataTable::VerifyAppendConstraints(ConstraintState &constraint_state, Clien
 		}
 	}
 
-	if (HasUniqueIndexes()) {
+	if (verify_keys && HasUniqueIndexes()) {
 		info->indexes.VerifyUniqueIndexes(storage ? &storage->GetDeleteIndexes() : nullptr, chunk, manager);
 	}
 
@@ -979,7 +974,7 @@ void DataTable::VerifyAppendConstraints(ConstraintState &constraint_state, Clien
 		}
 		case ConstraintType::FOREIGN_KEY: {
 			auto &bound_foreign_key = constraint->Cast<BoundForeignKeyConstraint>();
-			if (bound_foreign_key.info.IsAppendConstraint()) {
+			if (verify_keys && bound_foreign_key.info.IsAppendConstraint()) {
 				VerifyAppendForeignKeyConstraint(storage, bound_foreign_key, context, chunk);
 			}
 			break;
@@ -1052,7 +1047,7 @@ void DataTable::LocalAppend(LocalAppendState &state, DuckTableEntry &table_entry
 	// This happens only for the global indexes.
 	if (!unsafe) {
 		auto &constraint_state = *state.constraint_state;
-		VerifyAppendConstraints(constraint_state, context, chunk, *state.storage, nullptr);
+		VerifyAppendConstraints(constraint_state, context, chunk, *state.storage, nullptr, state.eager_constraints);
 	}
 
 	// Append to the transaction-local data.
@@ -1060,9 +1055,11 @@ void DataTable::LocalAppend(LocalAppendState &state, DuckTableEntry &table_entry
 }
 
 void DataTable::LocalAppend(DuckTableEntry &table, ClientContext &context, DataChunk &chunk,
-                            const vector<unique_ptr<BoundConstraint>> &bound_constraints, bool unsafe) {
+                            const vector<unique_ptr<BoundConstraint>> &bound_constraints, bool unsafe,
+                            bool eager_constraints) {
 	LocalAppendState append_state;
 	InitializeLocalAppend(append_state, table, context, bound_constraints);
+	append_state.eager_constraints = eager_constraints;
 	LocalAppend(append_state, table, context, chunk, unsafe);
 	FinalizeLocalAppend(append_state);
 }
@@ -1111,11 +1108,14 @@ void DataTable::LocalWALAppend(DuckTableEntry &table, ClientContext &context, Da
 
 void DataTable::LocalAppend(DuckTableEntry &table, ClientContext &context, DataChunk &chunk,
                             const vector<unique_ptr<BoundConstraint>> &bound_constraints, Vector &row_ids,
-                            DataChunk &delete_chunk) {
+                            DataChunk &delete_chunk, bool eager_constraints) {
 	LocalAppendState append_state;
 	auto &storage = table.GetStorage();
 	storage.InitializeLocalAppend(append_state, table, context, bound_constraints);
-	append_state.storage->AppendToDeleteIndexes(row_ids, delete_chunk);
+	append_state.eager_constraints = eager_constraints;
+	if (eager_constraints) {
+		append_state.storage->AppendToDeleteIndexes(row_ids, delete_chunk);
+	}
 
 	storage.LocalAppend(append_state, table, context, chunk, false);
 	storage.FinalizeLocalAppend(append_state);
@@ -1133,6 +1133,7 @@ void DataTable::LocalAppend(DuckTableEntry &table, ClientContext &context, Colum
 			storage.LocalAppend(append_state, table, context, chunk, false);
 		}
 		storage.FinalizeLocalAppend(append_state);
+		VerifyStatementConstraints(context, table);
 		return;
 	}
 
@@ -1177,6 +1178,7 @@ void DataTable::LocalAppend(DuckTableEntry &table, ClientContext &context, Colum
 		result.Reset();
 	}
 	storage.FinalizeLocalAppend(append_state);
+	VerifyStatementConstraints(context, table);
 }
 
 void DataTable::AppendLock(DuckTransaction &transaction, TableAppendState &state) {
@@ -1406,67 +1408,11 @@ void DataTable::RemoveFromIndexes(const QueryContext &context, Vector &row_ident
 //===--------------------------------------------------------------------===//
 // Delete
 //===--------------------------------------------------------------------===//
-static bool TableHasDeleteConstraints(TableCatalogEntry &table) {
-	for (auto &constraint : table.GetConstraints()) {
-		switch (constraint->type) {
-		case ConstraintType::NOT_NULL:
-		case ConstraintType::CHECK:
-		case ConstraintType::UNIQUE:
-			break;
-		case ConstraintType::FOREIGN_KEY: {
-			auto &foreign_key = constraint->Cast<ForeignKeyConstraint>();
-			if (foreign_key.info.IsDeleteConstraint()) {
-				return true;
-			}
-			break;
-		}
-		default:
-			throw NotImplementedException("Constraint type not implemented!");
-		}
-	}
-	return false;
-}
-
-void DataTable::VerifyDeleteConstraints(optional_ptr<LocalTableStorage> storage, TableDeleteState &state,
-                                        ClientContext &context, DataChunk &chunk) {
-	for (auto &constraint : state.constraint_state->bound_constraints) {
-		switch (constraint->type) {
-		case ConstraintType::NOT_NULL:
-		case ConstraintType::CHECK:
-		case ConstraintType::UNIQUE:
-			break;
-		case ConstraintType::FOREIGN_KEY: {
-			auto &bound_foreign_key = constraint->Cast<BoundForeignKeyConstraint>();
-			if (bound_foreign_key.info.IsDeleteConstraint()) {
-				VerifyDeleteForeignKeyConstraint(storage, bound_foreign_key, context, chunk);
-			}
-			break;
-		}
-		default:
-			throw NotImplementedException("Constraint type not implemented!");
-		}
-	}
-}
-
 unique_ptr<TableDeleteState> DataTable::InitializeDelete(TableCatalogEntry &table, ClientContext &context,
                                                          const vector<unique_ptr<BoundConstraint>> &bound_constraints) {
 	// Bind all indexes.
 	info->BindIndexes(context);
-
-	auto binder = Binder::CreateBinder(context);
-	vector<LogicalType> types;
-	auto result = make_uniq<TableDeleteState>();
-	result->has_delete_constraints = TableHasDeleteConstraints(table);
-	if (result->has_delete_constraints) {
-		// initialize the chunk if there are any constraints to verify
-		for (idx_t i = 0; i < column_definitions.size(); i++) {
-			result->col_ids.emplace_back(column_definitions[i].StorageOid());
-			types.emplace_back(column_definitions[i].Type());
-		}
-		result->verify_chunk.Initialize(Allocator::Get(context), types);
-		result->constraint_state = make_uniq<ConstraintState>(table, bound_constraints);
-	}
-	return result;
+	return make_uniq<TableDeleteState>();
 }
 
 //! The indexed columns to store in the undo entries of a delete, or nullptr if the given values miss any of them
@@ -1491,7 +1437,10 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 	if (count == 0) {
 		return 0;
 	}
-	auto stored_index_values = GetStoredIndexValues(info->indexes, index_values);
+	unique_ptr<DeleteIndexValues> stored_index_values;
+	if (Settings::Get<DebugStoreDeleteIndexValuesSetting>(context)) {
+		stored_index_values = GetStoredIndexValues(info->indexes, index_values);
+	}
 
 	auto &transaction = DuckTransaction::Get(context, db);
 	auto &local_storage = LocalStorage::Get(transaction);
@@ -1517,26 +1466,14 @@ idx_t DataTable::Delete(TableDeleteState &state, ClientContext &context, DuckTab
 
 		Vector offset_ids(row_identifiers, current_offset, pos);
 
-		// This is a transaction-local DELETE.
+		// This is a transaction-local DELETE: the foreign keys referencing its rows are checked by the parent rows
+		// that the transaction keeps at the statement end and at commit.
 		if (is_transaction_delete) {
-			if (state.has_delete_constraints) {
-				// Verify any delete constraints.
-				ColumnFetchState fetch_state;
-				local_storage.FetchChunk(*this, offset_ids, current_count, state.col_ids, state.verify_chunk,
-				                         fetch_state);
-				VerifyDeleteConstraints(storage, state, context, state.verify_chunk);
-			}
 			delete_count += local_storage.Delete(context.GetContext(), *this, table_entry, offset_ids, current_count);
 			continue;
 		}
 
-		// This is a regular DELETE.
-		if (state.has_delete_constraints) {
-			// Verify any delete constraints.
-			ColumnFetchState fetch_state;
-			Fetch(transaction, state.verify_chunk, state.col_ids, offset_ids, current_count, fetch_state);
-			VerifyDeleteConstraints(storage, state, context, state.verify_chunk);
-		}
+		// This is a regular DELETE: its foreign keys are checked at the statement end and at commit.
 		unique_ptr<DeleteIndexValues> batch_index_values;
 		if (stored_index_values) {
 			batch_index_values =
