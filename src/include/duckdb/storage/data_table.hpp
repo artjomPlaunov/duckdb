@@ -220,12 +220,9 @@ public:
 	//! References the values of all indexed columns of the deleted rows in table layout (see RowGroupCollection)
 	bool GetIndexedRows(Vector &row_identifiers, idx_t count, optional_ptr<const DeleteIndexValues> index_values,
 	                    DataChunk &fetch_chunk, DataChunk &result_chunk);
-	//! Verifies the unique and foreign key constraints of the transaction's changes to the table since the last
-	//! statement end: the new rows against the committed state and the transaction's own changes, and the
-	//! references to the deleted rows. Fills the transaction-local append and delete indexes.
+	//! Verifies the unique and foreign keys of the changes since the last statement end, filling the local indexes
 	void VerifyStatementConstraints(ClientContext &context, DuckTableEntry &table_entry);
-	//! The end of a statement that wrote the table: verifies its constraints, unless the commit verifies them
-	//! (an autocommit statement without RETURNING that is the only writer of its plan)
+	//! Verifies the constraints at the end of a statement, unless it is an autocommit sole writer without RETURNING
 	static void VerifyStatementEnd(ClientContext &context, DuckTableEntry &table_entry, bool return_chunk,
 	                               bool other_writers);
 	//! Remove the row identifiers from the indexes of the table added before the bound, with the keys from the

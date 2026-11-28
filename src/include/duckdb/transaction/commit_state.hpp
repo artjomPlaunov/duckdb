@@ -28,6 +28,7 @@ class ClientContext;
 
 struct DataTableInfo;
 class DataTable;
+class DuckTableEntry;
 struct DeleteInfo;
 struct DeleteIndexValues;
 struct UpdateInfo;
@@ -81,10 +82,12 @@ public:
 	void Verify();
 	static IndexRemovalType GetCommitRemovalType(ActiveTransactionState transaction_state);
 	//! Writes the row ids of the entry's rows
-	static void GetRowIds(DeleteInfo &info, row_t *row_numbers);
+	static void GetRowIds(DeleteInfo &info, Vector &row_ids);
 	//! The newest version of the table of the entry (e.g. after an ADD COLUMN of the deleting transaction): the indexes
 	//! of the shared list are numbered in it, and it holds the deleted rows under the same row ids
 	static DataTable &GetNewestStorage(DeleteInfo &info);
+	//! The newest version of the table entry of the entry
+	static DuckTableEntry &GetNewestEntry(DeleteInfo &info);
 	//! Reads the indexed column values the entry stores into a chunk in table layout, or returns nullptr
 	static unique_ptr<DeleteIndexValues> ReadIndexValues(DeleteInfo &info, DataTable &version_table,
 	                                                     DataChunk &stored_values, DataChunk &table_values);

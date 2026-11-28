@@ -163,20 +163,6 @@ void IndexEntry::InitializeLocalDeleteIndex(TableIndexList &delete_indexes) cons
 	InitializeLocalIndexesInternal(delete_indexes, nullptr);
 }
 
-bool IndexEntry::InitializeLocalAppendIndex(TableIndexList &append_indexes) const {
-	auto entry_lock = lock.GetSharedLock();
-	if (owned_index->GetConstraintType() == IndexConstraintType::NONE || !owned_index->IsBound() || IsDeferred()) {
-		return false;
-	}
-	auto &bound_index = owned_index->Cast<BoundIndex>();
-	if (!bound_index.SupportsDeltaIndexes()) {
-		return false;
-	}
-	append_indexes.AddIndex(bound_index.CreateEmptyCopy(bound_index.GetConstraintType()), index_oid,
-	                        ConstraintCheckMode::DEFAULT);
-	return true;
-}
-
 void IndexEntry::InitializeLocalIndexesInternal(TableIndexList &delete_indexes,
                                                 optional_ptr<TableIndexList> append_indexes) const {
 	auto entry_lock = lock.GetSharedLock();

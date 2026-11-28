@@ -40,15 +40,10 @@ static idx_t FillDeleteIndexes(DuckTransaction &transaction, DataTable &table, L
 		first_delete = MinValue(first_delete, absorbed);
 	}
 
-	idx_t delete_idx = 0;
-	transaction.ScanDeletes(table.GetDataTableInfo().get(), [&](DeleteInfo &info) {
-		if (delete_idx++ < first_delete) {
-			return;
-		}
+	auto append_deletes = [&](DeleteInfo &info, idx_t delete_idx) {
 		auto &version_table = IndexDataRemover::GetNewestStorage(info);
-		row_t row_numbers[STANDARD_VECTOR_SIZE];
-		IndexDataRemover::GetRowIds(info, row_numbers);
-		Vector row_ids(LogicalType::ROW_TYPE, data_ptr_cast(row_numbers), info.count);
+		Vector row_ids(LogicalType::ROW_TYPE, info.count);
+		IndexDataRemover::GetRowIds(info, row_ids);
 		DataChunk stored_values;
 		DataChunk table_values;
 		auto index_values = IndexDataRemover::ReadIndexValues(info, version_table, stored_values, table_values);
@@ -58,11 +53,32 @@ static idx_t FillDeleteIndexes(DuckTransaction &transaction, DataTable &table, L
 			return;
 		}
 		for (idx_t i = 0; i < targets.size(); i++) {
-			if (delete_idx > first_deletes[i]) {
+			if (delete_idx >= first_deletes[i]) {
 				targets[i]->AppendToDeleteIndexes(rows, row_ids);
 			}
 		}
-	});
+	};
+	auto &table_info = *table.GetDataTableInfo();
+	auto scanned_deletes = local_indexes.scanned_deletes;
+	if (first_delete < scanned_deletes) {
+		// a delete index added since gets the deletes scanned before
+		idx_t delete_idx = 0;
+		transaction.ScanDeletes(&table_info, [&](DeleteInfo &info) {
+			if (delete_idx < scanned_deletes) {
+				append_deletes(info, delete_idx);
+			}
+			delete_idx++;
+		});
+		for (auto &first : first_deletes) {
+			first = MaxValue(first, scanned_deletes);
+		}
+	}
+	// the deletes since the last scan
+	idx_t delete_idx = scanned_deletes;
+	transaction.ScanDeletes(
+	    &table_info, [&](DeleteInfo &info) { append_deletes(info, delete_idx++); },
+	    &local_indexes.delete_scan_position);
+	local_indexes.scanned_deletes = delete_idx;
 	for (auto &target : targets) {
 		local_indexes.deletes_in_index[target->GetIndexOid()] = delete_idx;
 	}
@@ -141,6 +157,7 @@ static void ScanNewRows(DuckTransaction &transaction, DataTable &table, LocalTab
 
 void DataTable::VerifyStatementConstraints(ClientContext &context, DuckTableEntry &table_entry) {
 	if (!HasIndexes()) {
+		// no constraint to check: the rows are checked against the indexes added later when they are added
 		return;
 	}
 	auto &transaction = DuckTransaction::Get(context, db);
@@ -159,21 +176,7 @@ void DataTable::VerifyStatementConstraints(ClientContext &context, DuckTableEntr
 	auto total_rows = collection.GetTotalRows();
 	auto first_row = local_indexes.checked_rows;
 
-	// a unique index added since the local storage was created gets an append index with the checked rows
 	auto &append_indexes = storage->GetAppendIndexes();
-	TableIndexList new_append_indexes;
-	for (auto entry : info->indexes.BuiltIndexEntries()) {
-		if (entry->GetBindState() == IndexBindState::BOUND && entry->IsUnique() && !append_indexes.FindEntry(*entry)) {
-			entry->InitializeLocalAppendIndex(new_append_indexes);
-		}
-	}
-	if (!new_append_indexes.Empty() && first_row > 0) {
-		ScanNewRows(transaction, *this, *storage, 0, first_row,
-		            [&](DataChunk &rows, Vector &row_ids) { new_append_indexes.Append(rows, row_ids); });
-	}
-	for (auto entry : new_append_indexes.IndexEntries()) {
-		append_indexes.AddEntry(std::move(entry));
-	}
 	if (first_row < total_rows) {
 		// unique keys: the new rows against the committed rows the transaction keeps, then against its own rows
 		auto &delete_indexes = storage->GetDeleteIndexes();
@@ -205,6 +208,28 @@ void DataTable::VerifyStatementConstraints(ClientContext &context, DuckTableEntr
 		}
 	}
 
+	if (!local_indexes.removed_local_rows.empty()) {
+		// referenced keys: the checked local rows deleted since must not have children left
+		auto removed_rows = std::move(local_indexes.removed_local_rows);
+		local_indexes.removed_local_rows.clear();
+		auto indexed_columns = info->indexes.GetIndexedColumns();
+		for (idx_t offset = 0; offset < removed_rows.size(); offset += STANDARD_VECTOR_SIZE) {
+			auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, removed_rows.size() - offset);
+			Vector row_ids(LogicalType::ROW_TYPE, count);
+			{
+				auto writer = FlatVector::Writer<row_t>(row_ids, count);
+				for (idx_t i = 0; i < count; i++) {
+					writer.WriteValue(removed_rows[offset + i]);
+				}
+			}
+			DataChunk fetch_chunk;
+			DataChunk rows;
+			if (collection.GetIndexedRows(indexed_columns, row_ids, count, nullptr, fetch_chunk, rows)) {
+				CommitForeignKeyCheck::VerifyRemovedLocalRows(context, transaction, *this, table_entry, rows);
+			}
+		}
+	}
+
 	if (local_indexes.checked_deletes < delete_count) {
 		// referenced keys: the parent rows deleted by the statement must not have children left
 		CommitForeignKeyCheck::VerifyDeletes(context, transaction, *this, table_entry, local_indexes.checked_deletes);
@@ -216,6 +241,7 @@ void DataTable::VerifyStatementEnd(ClientContext &context, DuckTableEntry &table
                                    bool other_writers) {
 	if (context.transaction.IsAutoCommit() && !return_chunk && !other_writers) {
 		// the commit verifies the constraints, with the statement-time errors
+		DuckTransaction::Get(context, table_entry.GetStorage().db).SkipStatementEnd();
 		return;
 	}
 	table_entry.GetStorage().VerifyStatementConstraints(context, table_entry);

@@ -127,6 +127,7 @@ void DuckTransaction::PushWrite(UndoFlags type, DuckTableEntry &table_entry, Row
 	}
 	auto alloc_size = DeleteInfo::GetAllocationSize(written.count, written.is_consecutive, written.previous_id_count,
 	                                                index_values_size);
+	auto write_key = undo_buffer.LockDeleteWrite();
 
 	auto undo_entry = undo_buffer.CreateEntry(type, alloc_size);
 	auto delete_info = reinterpret_cast<DeleteInfo *>(undo_entry.GetDataMutable());
@@ -187,8 +188,9 @@ void DuckTransaction::PushSequenceUsage(SequenceCatalogEntry &sequence, const Se
 }
 
 void DuckTransaction::ScanDeletes(optional_ptr<const DataTableInfo> table_info,
-                                  const std::function<void(DeleteInfo &info)> &callback) {
-	undo_buffer.ScanDeletes(table_info, callback);
+                                  const std::function<void(DeleteInfo &info)> &callback,
+                                  optional_ptr<UndoScanPosition> position) {
+	undo_buffer.ScanDeletes(table_info, callback, position);
 }
 
 void DuckTransaction::VerifyForeignKeys(ClientContext &context) {

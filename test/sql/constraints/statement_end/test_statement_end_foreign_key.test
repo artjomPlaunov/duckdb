@@ -195,3 +195,69 @@ query II
 SELECT id, v FROM u ORDER BY id;
 ----
 100	0
+
+# deleting a parent row of the transaction that a child row of the transaction references
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO p VALUES (50, 'local', [], 0);
+
+statement ok
+INSERT INTO c VALUES (50);
+
+statement error
+DELETE FROM p WHERE id = 50;
+----
+<REGEX>:Constraint Error: Violates foreign key constraint because key "pid: 50" is still referenced.*
+
+statement ok
+ROLLBACK;
+
+statement ok
+BEGIN;
+
+statement ok
+INSERT INTO p VALUES (51, 'local', [], 0);
+
+statement ok
+INSERT INTO c VALUES (51);
+
+statement ok
+DELETE FROM c WHERE pid = 51;
+
+statement ok
+DELETE FROM p WHERE id = 51;
+
+statement ok
+COMMIT;
+
+# a child table dropped after the transaction deleted a parent row
+statement ok
+CREATE TABLE p2 (id INTEGER PRIMARY KEY);
+
+statement ok
+CREATE TABLE c2 (pid INTEGER REFERENCES p2 (id));
+
+statement ok
+INSERT INTO p2 VALUES (1), (2);
+
+statement ok
+INSERT INTO c2 VALUES (2);
+
+statement ok
+BEGIN;
+
+statement ok
+DELETE FROM p2 WHERE id = 1;
+
+statement ok
+DROP TABLE c2;
+
+statement ok
+COMMIT;
+
+query I
+SELECT id FROM p2;
+----
+2

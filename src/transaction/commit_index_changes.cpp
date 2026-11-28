@@ -108,9 +108,8 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 	transaction.ScanDeletes(&table_info, [&](DeleteInfo &info) {
 		has_deletes = true;
 		auto &version_table = IndexDataRemover::GetNewestStorage(info);
-		row_t row_numbers[STANDARD_VECTOR_SIZE];
-		IndexDataRemover::GetRowIds(info, row_numbers);
-		Vector row_ids(LogicalType::ROW_TYPE, data_ptr_cast(row_numbers), info.count);
+		Vector row_ids(LogicalType::ROW_TYPE, info.count);
+		IndexDataRemover::GetRowIds(info, row_ids);
 		DataChunk stored_values;
 		DataChunk table_values;
 		auto index_values = IndexDataRemover::ReadIndexValues(info, version_table, stored_values, table_values);

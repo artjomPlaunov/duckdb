@@ -208,8 +208,6 @@ public:
 	void FinishBuild(unique_ptr<BoundIndex> index, idx_t index_oid, ConstraintCheckMode check_mode);
 	//! Adds only the transaction-local delete index.
 	void InitializeLocalDeleteIndex(TableIndexList &delete_indexes) const;
-	//! Adds only the transaction-local append index (none for a deferred constraint); returns whether it added one.
-	bool InitializeLocalAppendIndex(TableIndexList &append_indexes) const;
 
 public:
 	//! Acquire shared access to a stable physical index.

@@ -1,4 +1,5 @@
 #include "duckdb/transaction/commit_state.hpp"
+#include "duckdb/common/vector/vector_writer.hpp"
 #include "duckdb/transaction/transaction_data.hpp"
 
 #include "duckdb/catalog/catalog_entry/duck_index_entry.hpp"
@@ -96,33 +97,32 @@ bool IndexDataRemover::PushDelete(DeleteInfo &info) {
 		return false;
 	}
 
-	row_t row_numbers[STANDARD_VECTOR_SIZE];
-	GetRowIds(info, row_numbers);
+	Vector row_ids(LogicalType::ROW_TYPE, info.count);
+	GetRowIds(info, row_ids);
 	DataChunk stored_values;
 	DataChunk table_values;
 	auto index_values = ReadIndexValues(info, version_table, stored_values, table_values);
-	Flush(version_table, row_numbers, info.count, index_values.get());
+	Flush(version_table, FlatVector::GetDataMutable<row_t>(row_ids), info.count, index_values.get());
 	return removal_type == IndexRemovalType::MAIN_INDEX;
 }
 
-DataTable &IndexDataRemover::GetNewestStorage(DeleteInfo &info) {
+DuckTableEntry &IndexDataRemover::GetNewestEntry(DeleteInfo &info) {
 	reference<CatalogEntry> entry = *info.table;
 	while (entry.get().HasParent() && entry.get().Parent().type == CatalogType::TABLE_ENTRY) {
 		entry = entry.get().Parent();
 	}
-	return entry.get().Cast<DuckTableEntry>().GetStorage();
+	return entry.get().Cast<DuckTableEntry>();
 }
 
-void IndexDataRemover::GetRowIds(DeleteInfo &info, row_t *row_numbers) {
-	if (info.is_consecutive) {
-		for (idx_t i = 0; i < info.count; i++) {
-			row_numbers[i] = UnsafeNumericCast<int64_t>(info.base_row + i);
-		}
-		return;
-	}
-	auto rows = info.GetRows();
+DataTable &IndexDataRemover::GetNewestStorage(DeleteInfo &info) {
+	return GetNewestEntry(info).GetStorage();
+}
+
+void IndexDataRemover::GetRowIds(DeleteInfo &info, Vector &row_ids) {
+	auto writer = FlatVector::Writer<row_t>(row_ids, info.count);
+	auto rows = info.GetStoredRows();
 	for (idx_t i = 0; i < info.count; i++) {
-		row_numbers[i] = UnsafeNumericCast<int64_t>(info.base_row + rows[i]);
+		writer.WriteValue(UnsafeNumericCast<row_t>(info.base_row + (rows ? rows[i] : i)));
 	}
 }
 

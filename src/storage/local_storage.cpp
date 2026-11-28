@@ -274,7 +274,7 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 	if (error.HasError()) {
 		return error;
 	}
-	if (!RowsChecked()) {
+	if (transaction.StatementEndSkipped() && !RowsChecked()) {
 		// no statement end checked the rows: the commit checks them, with the errors of a statement
 		error = index_changes.VerifyUncheckedRows(transaction, *this);
 		if (error.HasError()) {
@@ -728,6 +728,11 @@ idx_t LocalStorage::Delete(Context &context, DataTable &table, DuckTableEntry &t
 		if (row_id < checked_end) {
 			deleted_row_ids[indexed_count++] = row_id;
 		}
+	}
+	if (indexed_count > 0) {
+		lock_guard<mutex> guard(local_indexes.check_lock);
+		local_indexes.removed_local_rows.insert(local_indexes.removed_local_rows.end(), deleted_row_ids.begin(),
+		                                        deleted_row_ids.begin() + NumericCast<int64_t>(indexed_count));
 	}
 	if (indexed_count > 0) {
 		Vector deleted_row_id_vector(LogicalType::ROW_TYPE, indexed_count);

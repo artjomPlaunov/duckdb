@@ -14,6 +14,7 @@ namespace duckdb {
 class ClientContext;
 class DataTable;
 class DuckTableEntry;
+class DataChunk;
 class DuckTransaction;
 
 //! Verifies the foreign keys a commit changes against the committed state at the commit position: under the commit
@@ -25,6 +26,9 @@ public:
 	//! entry on, unless the transaction inserted the key again
 	static void VerifyDeletes(ClientContext &context, DuckTransaction &transaction, DataTable &table,
 	                          DuckTableEntry &entry, idx_t first_delete);
+	//! Verifies that no child references a key of the removed local rows (in table layout) of the table
+	static void VerifyRemovedLocalRows(ClientContext &context, DuckTransaction &transaction, DataTable &table,
+	                                   DuckTableEntry &entry, DataChunk &rows);
 };
 
 } // namespace duckdb

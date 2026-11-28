@@ -16,6 +16,7 @@
 #include "duckdb/common/query_context.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/transaction/commit_index_changes.hpp"
+#include "duckdb/transaction/undo_buffer.hpp"
 
 namespace duckdb {
 class AttachedDatabase;
@@ -56,6 +57,11 @@ struct LocalStorageIndexes {
 	idx_t checked_deletes = 0;
 	//! The number of delete entries of the table whose keys each delete index holds, by index oid
 	unordered_map<idx_t, idx_t> deletes_in_index;
+	//! Where the last fill of the delete indexes stopped in the undo buffer, and the delete entries before it
+	UndoScanPosition delete_scan_position;
+	idx_t scanned_deletes = 0;
+	//! The checked local rows deleted since the last statement end: the references to them are checked
+	vector<row_t> removed_local_rows;
 };
 
 class LocalTableStorage : public enable_shared_from_this<LocalTableStorage> {

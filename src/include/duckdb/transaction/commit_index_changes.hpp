@@ -21,14 +21,12 @@ class DuckTransaction;
 class IndexEntry;
 class LocalTableStorage;
 
-//! Generates the ART keys of an index for chunks in table layout, with a private copy of the index expressions: other
-//! commits and statements use the executor of the index meanwhile
+//! Generates the ART keys of an index for chunks in table layout, with a private copy of the index expressions
 class IndexKeyGenerator {
 public:
 	IndexKeyGenerator(DatabaseInstance &db, shared_ptr<IndexEntry> entry);
 
-	//! Executes the index expressions on the chunk into key_chunk and generates its keys (empty for NULL keys).
-	//! Returns false if the entry was retired.
+	//! Generates the keys of the chunk (empty for NULL), or returns false if the entry was retired
 	bool GenerateKeys(DataChunk &table_chunk, ArenaAllocator &arena, unsafe_vector<ARTKey> &keys);
 	bool IsRetired() const {
 		return retired;
@@ -47,8 +45,7 @@ private:
 //! Whether the left key sorts before the right key
 bool ARTKeyLessThan(const ARTKey &left, const ARTKey &right);
 
-//! The live local rows of a commit whose key in a unique index belongs to a row the transaction deleted. Their row
-//! ids are inserted next to the deleted one (a gate), which the removal after the commit marker takes out.
+//! The live local rows of a commit that insert a key of a row the transaction deleted, next to that row id
 struct IndexSwaps {
 	explicit IndexSwaps(shared_ptr<IndexEntry> entry_p) : entry(std::move(entry_p)) {
 	}
@@ -58,20 +55,16 @@ struct IndexSwaps {
 	vector<idx_t> positions;
 };
 
-//! What the commit of a table's local rows changes in its unique indexes, derived from the local rows and the stored
-//! keys of the transaction's deletes. Prepared before the commit lock, completed under it for indexes added since.
+//! The swaps of a table's unique indexes, prepared before the commit lock and completed under it
 class CommitIndexChanges {
 public:
-	//! Finds the swaps of the unique indexes that are not prepared yet. Returns a constraint violation, before anything
-	//! shared is changed, if the live local rows insert one deleted key twice.
+	//! Prepares the unique indexes not prepared yet; a deleted key inserted twice is a violation
 	ErrorData Prepare(DuckTransaction &transaction, LocalTableStorage &storage);
 	//! The swaps of the entry, or nullptr if it has none
 	optional_ptr<const IndexSwaps> GetSwaps(const IndexEntry &entry) const;
-	//! Verifies the live local rows that no statement end checked against the committed rows of the unique indexes
-	//! that are not deferred, with the statement-time errors. The swaps are skipped: their keys are the transaction's.
+	//! Verifies the rows no statement end checked against the rows the transaction sees, except the swaps
 	ErrorData VerifyUncheckedRows(DuckTransaction &transaction, LocalTableStorage &storage);
-	//! From now on, a constraint error of a unique index that is not deferred is the error of a statement if the key is
-	//! the key of another of the appended rows (starting at row_start)
+	//! From now on, a duplicate among the appended rows (from row_start) is a statement error
 	void MarkImmediateErrors(row_t row_start) {
 		mark_immediate_errors = true;
 		append_row_start = row_start;
