@@ -94,7 +94,7 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 	unsafe_vector<ARTKey> keys;
 	transaction.ScanDeletes(&table_info, [&](DeleteInfo &info) {
 		has_deletes = true;
-		auto &version_table = info.table->GetStorage();
+		auto &version_table = IndexDataRemover::GetNewestStorage(info);
 		row_t row_numbers[STANDARD_VECTOR_SIZE];
 		IndexDataRemover::GetRowIds(info, row_numbers);
 		Vector row_ids(LogicalType::ROW_TYPE, data_ptr_cast(row_numbers), info.count);

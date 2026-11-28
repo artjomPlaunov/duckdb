@@ -90,7 +90,7 @@ IndexDataRemover::IndexDataRemover(DuckTransaction &transaction_p, QueryContext 
 }
 
 bool IndexDataRemover::PushDelete(DeleteInfo &info) {
-	auto &version_table = info.table->GetStorage();
+	auto &version_table = GetNewestStorage(info);
 	if (!version_table.HasIndexes()) {
 		// this table has no indexes: no cleanup to be done
 		return false;
@@ -103,6 +103,14 @@ bool IndexDataRemover::PushDelete(DeleteInfo &info) {
 	auto index_values = ReadIndexValues(info, version_table, stored_values, table_values);
 	Flush(version_table, row_numbers, info.count, index_values.get());
 	return removal_type == IndexRemovalType::MAIN_INDEX;
+}
+
+DataTable &IndexDataRemover::GetNewestStorage(DeleteInfo &info) {
+	reference<CatalogEntry> entry = *info.table;
+	while (entry.get().HasParent() && entry.get().Parent().type == CatalogType::TABLE_ENTRY) {
+		entry = entry.get().Parent();
+	}
+	return entry.get().Cast<DuckTableEntry>().GetStorage();
 }
 
 void IndexDataRemover::GetRowIds(DeleteInfo &info, row_t *row_numbers) {

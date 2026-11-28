@@ -80,6 +80,9 @@ public:
 	bool PushDelete(DeleteInfo &info);
 	void Verify();
 	static IndexRemovalType GetCommitRemovalType(ActiveTransactionState transaction_state);
+	//! The newest version of the table of the entry (e.g. after an ADD COLUMN of the deleting transaction): the indexes
+	//! of the shared list are numbered in it, and it holds the deleted rows under the same row ids
+	static DataTable &GetNewestStorage(DeleteInfo &info);
 	//! Writes the row ids of the entry's rows
 	static void GetRowIds(DeleteInfo &info, row_t *row_numbers);
 	//! Reads the indexed column values the entry stores into a chunk in table layout, or returns nullptr

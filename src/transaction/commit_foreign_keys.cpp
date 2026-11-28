@@ -78,7 +78,7 @@ private:
 void ScanDeletedRows(DuckTransaction &transaction, DataTable &table,
                      const std::function<void(DataChunk &rows, Vector &row_ids)> &callback) {
 	transaction.ScanDeletes(table.GetDataTableInfo().get(), [&](DeleteInfo &info) {
-		auto &version_table = info.table->GetStorage();
+		auto &version_table = IndexDataRemover::GetNewestStorage(info);
 		row_t row_numbers[STANDARD_VECTOR_SIZE];
 		IndexDataRemover::GetRowIds(info, row_numbers);
 		Vector row_ids(LogicalType::ROW_TYPE, data_ptr_cast(row_numbers), info.count);
