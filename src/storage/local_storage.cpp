@@ -281,7 +281,7 @@ ErrorData LocalTableStorage::AppendToIndexes(DuckTransaction &transaction, Table
 			transaction.MarkStatementConstraintError();
 			return error;
 		}
-		index_changes.MarkImmediateErrors();
+		index_changes.MarkImmediateErrors(append_state.row_start);
 	}
 	error = AppendToIndexes(transaction, collection, index_list, table.GetTypes(), append_state.current_row,
 	                        &index_changes);

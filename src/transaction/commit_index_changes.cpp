@@ -199,9 +199,64 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 	return ErrorData();
 }
 
-void CommitIndexChanges::RecordAppendError(const IndexEntry &entry, const ErrorData &error) const {
-	if (mark_immediate_errors && error.Type() == ExceptionType::CONSTRAINT && !entry.IsDeferred()) {
-		immediate_error = true;
+//! The rows that the committed state of the index holds for the keys of the chunk (in table layout)
+static unsafe_vector<row_t> GetKeyHolders(IndexEntry &entry, DataChunk &chunk) {
+	unsafe_vector<row_t> holders;
+	auto handle = entry.TryGetReadHandle<BoundIndex>();
+	if (!handle) {
+		return holders;
+	}
+	auto &db = (*handle)->db.GetDatabase();
+	handle.reset();
+	IndexKeyGenerator generator(db, entry.shared_from_this());
+	ArenaAllocator arena(Allocator::DefaultAllocator());
+	unsafe_vector<ARTKey> keys;
+	if (!generator.GenerateKeys(chunk, arena, keys)) {
+		return holders;
+	}
+	SelectionVector sel(chunk.size());
+	idx_t count = 0;
+	for (idx_t i = 0; i < chunk.size(); i++) {
+		if (!keys[i].Empty()) {
+			sel.set_index(count++, i);
+		}
+	}
+	DataChunk key_values;
+	key_values.InitializeEmpty(generator.key_chunk.GetTypes());
+	key_values.Slice(generator.key_chunk, sel, count);
+	entry.ScanCommittedRowIds(key_values, holders);
+	return holders;
+}
+
+void CommitIndexChanges::RecordAppendError(IndexEntry &entry, const ErrorData &error, DataChunk &chunk) const {
+	if (!mark_immediate_errors || error.Type() != ExceptionType::CONSTRAINT || entry.IsDeferred()) {
+		return;
+	}
+	// a key that only the appended rows hold is a duplicate among the statement's rows
+	for (auto row_id : GetKeyHolders(entry, chunk)) {
+		if (row_id < append_row_start) {
+			return;
+		}
+	}
+	immediate_error = true;
+}
+
+//! Throws the statement-time error if a row of the chunk has the key of a row that the transaction sees. A key of a row
+//! committed after its start is left to the append, which reports it as a commit conflict.
+static void VerifyAgainstVisibleRows(DuckTransaction &transaction, DataTable &table, IndexEntry &entry,
+                                     DataChunk &chunk) {
+	try {
+		entry.VerifyAppend(nullptr, chunk, nullptr);
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		if (error.Type() != ExceptionType::CONSTRAINT) {
+			throw;
+		}
+		for (auto row_id : GetKeyHolders(entry, chunk)) {
+			if (table.CanFetch(transaction, row_id)) {
+				throw;
+			}
+		}
 	}
 }
 
@@ -243,7 +298,7 @@ ErrorData CommitIndexChanges::VerifyUncheckedRows(DuckTransaction &transaction, 
 			for (auto &entry : entries) {
 				auto swaps = GetSwaps(*entry);
 				if (!swaps) {
-					entry->VerifyAppend(nullptr, table_chunk, nullptr);
+					VerifyAgainstVisibleRows(transaction, table, *entry, table_chunk);
 					continue;
 				}
 				SelectionVector sel(index_chunk.size());
@@ -259,7 +314,7 @@ ErrorData CommitIndexChanges::VerifyUncheckedRows(DuckTransaction &transaction, 
 				DataChunk other_rows;
 				other_rows.InitializeEmpty(types);
 				other_rows.Slice(table_chunk, sel, count);
-				entry->VerifyAppend(nullptr, other_rows, nullptr);
+				VerifyAgainstVisibleRows(transaction, table, *entry, other_rows);
 			}
 			position += index_chunk.size();
 		}

@@ -217,8 +217,9 @@ ErrorData TableIndexList::Append(optional_ptr<TableIndexList> delete_indexes, Da
 }
 
 //! Appends the rows of the chunk to the entry, the swaps next to the rows the transaction deleted
-static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, DataChunk &chunk, Vector &row_ids,
-                                 idx_t position, IndexAppendMode append_mode, optional_idx active_checkpoint) {
+static ErrorData AppendWithSwaps(const CommitIndexChanges &changes, IndexEntry &entry, const IndexSwaps &swaps,
+                                 DataChunk &chunk, Vector &row_ids, idx_t position, IndexAppendMode append_mode,
+                                 optional_idx active_checkpoint) {
 	auto &positions = swaps.positions;
 	auto it = std::lower_bound(positions.begin(), positions.end(), position);
 	SelectionVector swap_sel(chunk.size());
@@ -234,7 +235,11 @@ static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, Dat
 		}
 	}
 	if (swap_count == 0) {
-		return entry.Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
+		auto error = entry.Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
+		if (error.HasError()) {
+			changes.RecordAppendError(entry, error, chunk);
+		}
+		return error;
 	}
 
 	DataChunk swap_chunk;
@@ -251,6 +256,7 @@ static ErrorData AppendWithSwaps(IndexEntry &entry, const IndexSwaps &swaps, Dat
 	Vector other_row_ids(row_ids, other_sel, other_count);
 	error = entry.Append(other_chunk, other_row_ids, nullptr, append_mode, active_checkpoint);
 	if (error.HasError()) {
+		changes.RecordAppendError(entry, error, other_chunk);
 		entry.RevertAppend(swap_chunk, swap_row_ids);
 	}
 	return error;
@@ -268,12 +274,14 @@ ErrorData TableIndexList::Append(const CommitIndexChanges &changes, DataChunk &c
 	for (const auto &entry : index_entries) {
 		auto swaps = changes.GetSwaps(*entry);
 		if (swaps) {
-			error = AppendWithSwaps(*entry, *swaps, chunk, row_ids, position, append_mode, active_checkpoint);
+			error = AppendWithSwaps(changes, *entry, *swaps, chunk, row_ids, position, append_mode, active_checkpoint);
 		} else {
 			error = entry->Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
+			if (error.HasError()) {
+				changes.RecordAppendError(*entry, error, chunk);
+			}
 		}
 		if (error.HasError()) {
-			changes.RecordAppendError(*entry, error);
 			break;
 		}
 		already_appended.push_back(entry);

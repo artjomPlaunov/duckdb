@@ -70,12 +70,14 @@ public:
 	//! Verifies the live local rows that no statement end checked against the committed rows of the unique indexes
 	//! that are not deferred, with the statement-time errors. The swaps are skipped: their keys are the transaction's.
 	ErrorData VerifyUncheckedRows(DuckTransaction &transaction, LocalTableStorage &storage);
-	//! A constraint error of a unique index that is not deferred is a statement error from now on
-	void MarkImmediateErrors() {
+	//! From now on, a constraint error of a unique index that is not deferred is the error of a statement if the key is
+	//! the key of another of the appended rows (starting at row_start)
+	void MarkImmediateErrors(row_t row_start) {
 		mark_immediate_errors = true;
+		append_row_start = row_start;
 	}
-	//! Records a constraint error of the entry during the append
-	void RecordAppendError(const IndexEntry &entry, const ErrorData &error) const;
+	//! Records a constraint error of the entry while appending the chunk
+	void RecordAppendError(IndexEntry &entry, const ErrorData &error, DataChunk &chunk) const;
 	bool HasImmediateError() const {
 		return immediate_error;
 	}
@@ -86,6 +88,7 @@ private:
 	//! Whether the transaction deleted no committed row of the table: then there are no swaps
 	bool no_deletes = false;
 	bool mark_immediate_errors = false;
+	row_t append_row_start = 0;
 	mutable bool immediate_error = false;
 };
 
