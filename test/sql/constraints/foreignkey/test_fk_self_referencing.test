@@ -21,10 +21,17 @@ CREATE TABLE employee(
 statement ok
 INSERT INTO employee VALUES (1, NULL, 'Smith'), (2, NULL, 'Jhon'), (3, NULL, 'Romeo');
 
-statement error
+# a row can reference itself
+statement ok
 INSERT INTO employee VALUES (4, 4, 'Mark');
+
+statement error
+INSERT INTO employee VALUES (5, 6, 'Mark');
 ----
 <REGEX>:Constraint Error.*Violates foreign key constraint.*
+
+statement ok
+DELETE FROM employee WHERE id = 4;
 
 statement ok
 INSERT INTO employee VALUES (4, 2, 'Mark');

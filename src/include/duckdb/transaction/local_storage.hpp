@@ -47,6 +47,15 @@ struct LocalStorageIndexes {
 	TableIndexList append_indexes;
 	//! The set of delete indexes.
 	TableIndexList delete_indexes;
+	//! Held by the check at the end of a statement
+	mutex check_lock;
+	//! The local rows (from the start of the collection) checked at the end of a statement: their keys are in the
+	//! append indexes
+	idx_t checked_rows = 0;
+	//! The delete entries of the table whose foreign keys were checked at the end of a statement
+	idx_t checked_deletes = 0;
+	//! The number of delete entries of the table whose keys each delete index holds, by index oid
+	unordered_map<idx_t, idx_t> deletes_in_index;
 };
 
 class LocalTableStorage : public enable_shared_from_this<LocalTableStorage> {
@@ -155,6 +164,11 @@ public:
 	TableIndexList &GetDeleteIndexes() const {
 		return indexes->delete_indexes;
 	}
+	LocalStorageIndexes &GetLocalIndexes() const {
+		return *indexes;
+	}
+	//! Whether the local rows were all checked at the end of a statement
+	bool RowsChecked() const;
 
 private:
 	//! The transaction-local indexes, shared with the storage of the next version of the table after an ALTER
@@ -272,6 +286,7 @@ public:
 	bool CanFetch(DataTable &table, const row_t row_id);
 	TableIndexList &GetIndexes(Context &context, DataTable &table);
 	shared_ptr<LocalTableStorage> GetStorage(const DataTable &table);
+	shared_ptr<LocalTableStorage> GetOrCreateStorage(Context &context, DataTable &table);
 
 	void VerifyNewConstraint(Context &context, DataTable &parent, const BoundConstraint &constraint);
 

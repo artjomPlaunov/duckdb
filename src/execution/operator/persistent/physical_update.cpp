@@ -329,7 +329,7 @@ SinkResultType PhysicalUpdate::Sink(ExecutionContext &context, DataChunk &chunk,
 	auto &delete_state = l_state.GetDeleteState(table, tableref, context.client);
 	table.Delete(delete_state, context.client, tableref, del_row_ids, update_count, &index_values);
 
-	table.LocalAppend(tableref, context.client, mock_chunk, bound_constraints, del_row_ids, delete_chunk);
+	table.LocalAppend(tableref, context.client, mock_chunk, bound_constraints, del_row_ids, delete_chunk, false);
 	if (return_chunk) {
 		if (capture_old_rows) {
 			// Apply the dedup/del+insert selection vector to the OLD columns so they line up with the NEW image.
@@ -492,6 +492,8 @@ public:
 };
 
 unique_ptr<GlobalSourceState> PhysicalUpdate::GetGlobalSourceState(ClientContext &context) const {
+	// the end of the statement: before any row is returned
+	DataTable::VerifyStatementEnd(context, tableref, return_chunk, other_writers);
 	return make_uniq<UpdateSourceState>(*this);
 }
 

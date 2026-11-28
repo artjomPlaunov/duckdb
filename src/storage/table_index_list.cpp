@@ -123,6 +123,12 @@ shared_ptr<IndexEntry> TableIndexList::AddIndex(unique_ptr<Index> index, idx_t i
 	return index_entry;
 }
 
+void TableIndexList::AddEntry(shared_ptr<IndexEntry> entry) {
+	D_ASSERT(entry->GetBindState() == IndexBindState::BOUND);
+	annotated_lock_guard lock(index_entries_lock);
+	index_entries.push_back(std::move(entry));
+}
+
 shared_ptr<IndexEntry> TableIndexList::AddBuildingIndex(const BoundIndex &index_template, transaction_t build_commit,
                                                         transaction_t build_transaction) {
 	annotated_lock_guard lock(index_entries_lock);
@@ -267,6 +273,7 @@ ErrorData TableIndexList::Append(const CommitIndexChanges &changes, DataChunk &c
 			error = entry->Append(chunk, row_ids, nullptr, append_mode, active_checkpoint);
 		}
 		if (error.HasError()) {
+			changes.RecordAppendError(*entry, error);
 			break;
 		}
 		already_appended.push_back(entry);

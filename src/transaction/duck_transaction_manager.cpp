@@ -525,6 +525,10 @@ ErrorData DuckTransactionManager::CommitTransaction(ClientContext &context, Tran
 
 	if (error.HasError()) {
 		DUCKDB_LOG(context, TransactionLogType, db, "Rollback (after failed commit)", info.commit_id);
+		if (transaction.IsStatementConstraintError() && error.Type() == ExceptionType::CONSTRAINT) {
+			// the commit verified the constraints of the statement: its error is the error of the statement
+			error.SetExtraInfo(STATEMENT_CONSTRAINT_ERROR, "true");
+		}
 
 		// COMMIT not successful: ROLLBACK.
 		checkpoint_decision = CheckpointDecision(error.Message());

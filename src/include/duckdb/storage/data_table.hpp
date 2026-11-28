@@ -139,13 +139,15 @@ public:
 	                 bool unsafe);
 	//! Finalizes a transaction-local append
 	void FinalizeLocalAppend(LocalAppendState &state);
-	//! Append a chunk to the transaction-local storage of this table and update the delete indexes.
+	//! Append a chunk to the transaction-local storage of this table after deleting the rows of delete_chunk; with
+	//! eager_constraints the delete indexes are updated right away (see LocalAppendState)
 	void LocalAppend(DuckTableEntry &table, ClientContext &context, DataChunk &chunk,
 	                 const vector<unique_ptr<BoundConstraint>> &bound_constraints, Vector &row_ids,
-	                 DataChunk &delete_chunk);
+	                 DataChunk &delete_chunk, bool eager_constraints);
 	//! Appends to the transaction-local storage of this table
 	void LocalAppend(DuckTableEntry &table, ClientContext &context, DataChunk &chunk,
-	                 const vector<unique_ptr<BoundConstraint>> &bound_constraints, bool unsafe = false);
+	                 const vector<unique_ptr<BoundConstraint>> &bound_constraints, bool unsafe = false,
+	                 bool eager_constraints = false);
 	//! Append a chunk to the transaction-local storage of this table.
 	void LocalWALAppend(DuckTableEntry &table, ClientContext &context, DataChunk &chunk,
 	                    const vector<unique_ptr<BoundConstraint>> &bound_constraints);
@@ -218,6 +220,14 @@ public:
 	//! References the values of all indexed columns of the deleted rows in table layout (see RowGroupCollection)
 	bool GetIndexedRows(Vector &row_identifiers, idx_t count, optional_ptr<const DeleteIndexValues> index_values,
 	                    DataChunk &fetch_chunk, DataChunk &result_chunk);
+	//! Verifies the unique and foreign key constraints of the transaction's changes to the table since the last
+	//! statement end: the new rows against the committed state and the transaction's own changes, and the
+	//! references to the deleted rows. Fills the transaction-local append and delete indexes.
+	void VerifyStatementConstraints(ClientContext &context, DuckTableEntry &table_entry);
+	//! The end of a statement that wrote the table: verifies its constraints, unless the commit verifies them
+	//! (an autocommit statement without RETURNING that is the only writer of its plan)
+	static void VerifyStatementEnd(ClientContext &context, DuckTableEntry &table_entry, bool return_chunk,
+	                               bool other_writers);
 	//! Remove the row identifiers from the indexes of the table added before the bound, with the keys from the
 	//! given indexed column values if they cover every index, else from the fetched rows
 	void RemoveFromIndexes(const QueryContext &context, Vector &row_identifiers, idx_t count,
@@ -279,9 +289,11 @@ public:
 	//! Initialize constraint verification state
 	unique_ptr<ConstraintState> InitializeConstraintState(TableCatalogEntry &table,
 	                                                      const vector<unique_ptr<BoundConstraint>> &bound_constraints);
-	//! Verify constraints with a chunk from the Append containing all columns of the table
+	//! Verify constraints with a chunk from the Append containing all columns of the table. The unique and foreign
+	//! key constraints are verified only with verify_keys (the legacy ON CONFLICT path), else at the statement end.
 	void VerifyAppendConstraints(ConstraintState &constraint_state, ClientContext &context, DataChunk &chunk,
-	                             optional_ptr<LocalTableStorage> local_storage, optional_ptr<ConflictManager> manager);
+	                             optional_ptr<LocalTableStorage> local_storage, optional_ptr<ConflictManager> manager,
+	                             bool verify_keys);
 
 	shared_ptr<DataTableInfo> &GetDataTableInfo();
 
@@ -335,9 +347,6 @@ private:
 	//! Verify constraints with a chunk from the Update containing only the specified column_ids
 	void VerifyUpdateConstraints(ConstraintState &state, ClientContext &context, DataChunk &chunk,
 	                             const vector<PhysicalIndex> &column_ids);
-	//! Verify constraints with a chunk from the Delete containing all columns of the table
-	void VerifyDeleteConstraints(optional_ptr<LocalTableStorage> storage, TableDeleteState &state,
-	                             ClientContext &context, DataChunk &chunk);
 
 	void InitializeScanWithOffset(DuckTransaction &transaction, TableScanState &state,
 	                              const vector<StorageIndex> &column_ids, idx_t start_row, idx_t end_row);
@@ -351,9 +360,6 @@ private:
 	                                const BoundForeignKeyConstraint &bound_foreign_key, ClientContext &context,
 	                                DataChunk &chunk, VerifyExistenceType type);
 	void VerifyAppendForeignKeyConstraint(optional_ptr<LocalTableStorage> storage,
-	                                      const BoundForeignKeyConstraint &bound_foreign_key, ClientContext &context,
-	                                      DataChunk &chunk);
-	void VerifyDeleteForeignKeyConstraint(optional_ptr<LocalTableStorage> storage,
 	                                      const BoundForeignKeyConstraint &bound_foreign_key, ClientContext &context,
 	                                      DataChunk &chunk);
 

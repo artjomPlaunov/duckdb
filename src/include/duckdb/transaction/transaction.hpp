@@ -15,6 +15,10 @@
 #include "duckdb/common/atomic.hpp"
 
 namespace duckdb {
+
+//! The extra info of a commit error that is the constraint error of the autocommit statement it ends
+static constexpr const char *STATEMENT_CONSTRAINT_ERROR = "statement_constraint_error";
+
 class Catalog;
 class SequenceCatalogEntry;
 class SchemaCatalogEntry;

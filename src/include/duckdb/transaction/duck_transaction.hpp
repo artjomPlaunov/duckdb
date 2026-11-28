@@ -101,6 +101,13 @@ public:
 	                 const std::function<void(DeleteInfo &info)> &callback);
 	//! Verifies the foreign keys of the commit, once, under the commit lock before it changes a shared index
 	void VerifyForeignKeys(ClientContext &context);
+	//! The constraint error of the commit is the error of a statement whose constraints the commit verified
+	void MarkStatementConstraintError() {
+		statement_constraint_error = true;
+	}
+	bool IsStatementConstraintError() const {
+		return statement_constraint_error;
+	}
 	//! Prepares the changes of the commit to the unique indexes of the tables, before the commit lock is taken
 	ErrorData PrepareIndexChanges() noexcept;
 
@@ -152,6 +159,8 @@ private:
 	atomic<bool> is_checkpoint_transaction {false};
 	//! Whether the commit verified the foreign keys already
 	bool foreign_keys_verified = false;
+	//! Whether the commit failed on a constraint that no statement end verified
+	bool statement_constraint_error = false;
 };
 
 } // namespace duckdb

@@ -76,8 +76,12 @@ private:
 //! Calls the callback with the indexed columns (in table layout) and the row ids of the committed rows the transaction
 //! deleted from the table
 void ScanDeletedRows(DuckTransaction &transaction, DataTable &table,
-                     const std::function<void(DataChunk &rows, Vector &row_ids)> &callback) {
+                     const std::function<void(DataChunk &rows, Vector &row_ids)> &callback, idx_t first_delete = 0) {
+	idx_t delete_idx = 0;
 	transaction.ScanDeletes(table.GetDataTableInfo().get(), [&](DeleteInfo &info) {
+		if (delete_idx++ < first_delete) {
+			return;
+		}
 		auto &version_table = IndexDataRemover::GetNewestStorage(info);
 		row_t row_numbers[STANDARD_VECTOR_SIZE];
 		IndexDataRemover::GetRowIds(info, row_numbers);
@@ -147,6 +151,20 @@ class ForeignKeyVerifier {
 public:
 	ForeignKeyVerifier(ClientContext &context, DuckTransaction &transaction)
 	    : context(context), transaction(transaction), local_storage(transaction.GetLocalStorage()) {
+	}
+
+	//! Verifies the parent side of the foreign keys of the table for its deletes from the first_delete-th on
+	void VerifyDeletes(DataTable &table, DuckTableEntry &entry, idx_t first_delete) {
+		ChangedTable changed {table, entry, nullptr, true};
+		for (auto &constraint : entry.GetConstraints()) {
+			if (constraint->type != ConstraintType::FOREIGN_KEY) {
+				continue;
+			}
+			auto &foreign_key = constraint->Cast<ForeignKeyConstraint>().info;
+			if (foreign_key.IsDeleteConstraint()) {
+				VerifyDeletedParentRows(changed, foreign_key, first_delete);
+			}
+		}
 	}
 
 	void Verify() {
@@ -292,6 +310,9 @@ private:
 				if (referenced_keys[i].Empty() || local_parent_keys.Contains(referenced_keys[i])) {
 					continue;
 				}
+				if (!child.storage->RowsChecked()) {
+					transaction.MarkStatementConstraintError();
+				}
 				throw ConstraintException(
 				    parent_index->GetConstraintViolationMessage(VerifyExistenceType::APPEND_FK, i, referenced));
 			}
@@ -300,7 +321,7 @@ private:
 
 	//! No committed child row the transaction keeps, and no live local child row, references a key of a parent row the
 	//! transaction deleted, unless a live local parent row inserts the key again.
-	void VerifyDeletedParentRows(ChangedTable &parent, const ForeignKeyInfo &foreign_key) {
+	void VerifyDeletedParentRows(ChangedTable &parent, const ForeignKeyInfo &foreign_key, idx_t first_delete = 0) {
 		auto &parent_table = parent.table.get();
 		auto &child_entry = GetPartner(parent.entry, foreign_key);
 		auto &child_table = child_entry.GetStorage();
@@ -345,37 +366,52 @@ private:
 			}
 		});
 
-		ScanDeletedRows(transaction, parent_table, [&](DataChunk &rows, Vector &) {
-			DataChunk referenced;
-			MapKeyColumns(rows, foreign_key.pk_keys, foreign_key.fk_keys, child_types, referenced);
-			arena.Reset();
-			child_keys.GenerateKeys(referenced, arena, keys);
-			SelectionVector sel(rows.size());
-			idx_t count = 0;
-			for (idx_t i = 0; i < rows.size(); i++) {
-				if (keys[i].Empty() || local_parent_keys.Contains(keys[i])) {
-					continue;
-				}
-				if (local_child_keys.Contains(keys[i])) {
-					throw ConstraintException(
-					    child_index->GetConstraintViolationMessage(VerifyExistenceType::DELETE_FK, i, referenced));
-				}
-				sel.set_index(count++, i);
-			}
-			if (count == 0 || !IsReferenced(*child_index, child_keys, sel, count, deleted_children)) {
-				return;
-			}
-			// find the referenced key for the error
-			for (idx_t i = 0; i < count; i++) {
-				SelectionVector row_sel(1);
-				row_sel.set_index(0, sel.get_index(i));
-				if (IsReferenced(*child_index, child_keys, row_sel, 1, deleted_children)) {
-					throw ConstraintException(child_index->GetConstraintViolationMessage(VerifyExistenceType::DELETE_FK,
-					                                                                     sel.get_index(i), referenced));
-				}
-			}
-			throw InternalException("a deleted parent key is referenced, but by none of the deleted rows");
-		});
+		ScanDeletedRows(
+		    transaction, parent_table,
+		    [&](DataChunk &rows, Vector &) {
+			    DataChunk referenced;
+			    MapKeyColumns(rows, foreign_key.pk_keys, foreign_key.fk_keys, child_types, referenced);
+			    arena.Reset();
+			    child_keys.GenerateKeys(referenced, arena, keys);
+			    SelectionVector sel(rows.size());
+			    idx_t count = 0;
+			    for (idx_t i = 0; i < rows.size(); i++) {
+				    if (keys[i].Empty() || local_parent_keys.Contains(keys[i])) {
+					    continue;
+				    }
+				    if (local_child_keys.Contains(keys[i])) {
+					    MarkUncheckedDeletes(parent_table);
+					    throw ConstraintException(
+					        child_index->GetConstraintViolationMessage(VerifyExistenceType::DELETE_FK, i, referenced));
+				    }
+				    sel.set_index(count++, i);
+			    }
+			    if (count == 0 || !IsReferenced(*child_index, child_keys, sel, count, deleted_children)) {
+				    return;
+			    }
+			    // find the referenced key for the error
+			    for (idx_t i = 0; i < count; i++) {
+				    SelectionVector row_sel(1);
+				    row_sel.set_index(0, sel.get_index(i));
+				    if (IsReferenced(*child_index, child_keys, row_sel, 1, deleted_children)) {
+					    MarkUncheckedDeletes(parent_table);
+					    throw ConstraintException(child_index->GetConstraintViolationMessage(
+					        VerifyExistenceType::DELETE_FK, sel.get_index(i), referenced));
+				    }
+			    }
+			    throw InternalException("a deleted parent key is referenced, but by none of the deleted rows");
+		    },
+		    first_delete);
+	}
+
+	//! The error is a statement error if no statement end checked the deletes of the parent table
+	void MarkUncheckedDeletes(DataTable &parent_table) {
+		auto storage = local_storage.GetStorage(parent_table);
+		idx_t delete_count = 0;
+		transaction.ScanDeletes(parent_table.GetDataTableInfo().get(), [&](DeleteInfo &) { delete_count++; });
+		if (!storage || storage->GetLocalIndexes().checked_deletes != delete_count) {
+			transaction.MarkStatementConstraintError();
+		}
 	}
 
 	//! Whether a committed child row that the transaction does not delete has one of the selected keys of the last
@@ -407,6 +443,12 @@ private:
 void CommitForeignKeyCheck::Verify(ClientContext &context, DuckTransaction &transaction) {
 	ForeignKeyVerifier verifier(context, transaction);
 	verifier.Verify();
+}
+
+void CommitForeignKeyCheck::VerifyDeletes(ClientContext &context, DuckTransaction &transaction, DataTable &table,
+                                          DuckTableEntry &entry, idx_t first_delete) {
+	ForeignKeyVerifier verifier(context, transaction);
+	verifier.VerifyDeletes(table, entry, first_delete);
 }
 
 } // namespace duckdb

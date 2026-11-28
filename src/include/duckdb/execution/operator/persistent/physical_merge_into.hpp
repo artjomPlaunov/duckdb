@@ -114,6 +114,9 @@ public:
 	optional_idx source_marker;
 	bool parallel;
 	bool return_chunk;
+	//! Whether another operator of the plan writes too (e.g. a trigger): then the constraints are verified at the end
+	//! of the operator also in autocommit
+	bool other_writers = false;
 	//! Whether the actions must run one after the other instead of concurrently - required when multiple actions
 	//! append to the same table, which their operators cannot do concurrently
 	bool serialize_actions;

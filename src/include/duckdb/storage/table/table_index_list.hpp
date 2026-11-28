@@ -46,6 +46,8 @@ public:
 	TableIndexIterationHelper<shared_ptr<IndexEntry>> BuiltIndexEntries() const;
 	//! Adds an index entry to the list of index entries, and returns it.
 	shared_ptr<IndexEntry> AddIndex(unique_ptr<Index> index, idx_t index_oid, ConstraintCheckMode check_mode);
+	//! Adds a bound entry of another list
+	void AddEntry(shared_ptr<IndexEntry> entry);
 	//! Adds the entry of an index being built (requires the commit lock)
 	shared_ptr<IndexEntry> AddBuildingIndex(const BoundIndex &index_template, transaction_t build_commit,
 	                                        transaction_t build_transaction);

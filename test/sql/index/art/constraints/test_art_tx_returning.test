@@ -23,13 +23,11 @@ UPDATE tbl_list SET id = id + 5 RETURNING id, payload;
 statement ok
 INSERT INTO tbl_list SELECT range + 10, [(range + 10) || ' payload'] FROM range(3000);
 
-# For each incoming chunk, we add the row IDs to the delete index.
-# For standard_vector_size = 2048, we delete the first chunk, and then try to insert the incremented values.
-# This is expected to throw a constraint violation.
-# The value going into the next chunk is not yet in the delete index, as the chunk that would add that value hasn't been processed, yet.
-# This scenario is a known limitation (also in postgres).
-
-statement error
+# The keys are checked at the end of the statement, so shifting them across chunks works.
+statement ok
 UPDATE tbl_list SET id = id + 1 RETURNING id, payload;
+
+query III
+SELECT count(*), min(id), max(id) FROM tbl_list;
 ----
-<REGEX>:Constraint Error.*violates primary key constraint.*
+3005	6	3010

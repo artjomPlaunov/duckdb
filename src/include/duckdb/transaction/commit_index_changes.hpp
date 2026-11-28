@@ -67,12 +67,26 @@ public:
 	ErrorData Prepare(DuckTransaction &transaction, LocalTableStorage &storage);
 	//! The swaps of the entry, or nullptr if it has none
 	optional_ptr<const IndexSwaps> GetSwaps(const IndexEntry &entry) const;
+	//! Verifies the live local rows that no statement end checked against the committed rows of the unique indexes
+	//! that are not deferred, with the statement-time errors. The swaps are skipped: their keys are the transaction's.
+	ErrorData VerifyUncheckedRows(DuckTransaction &transaction, LocalTableStorage &storage);
+	//! A constraint error of a unique index that is not deferred is a statement error from now on
+	void MarkImmediateErrors() {
+		mark_immediate_errors = true;
+	}
+	//! Records a constraint error of the entry during the append
+	void RecordAppendError(const IndexEntry &entry, const ErrorData &error) const;
+	bool HasImmediateError() const {
+		return immediate_error;
+	}
 
 private:
 	//! The unique indexes whose swaps were prepared
 	vector<IndexSwaps> prepared;
 	//! Whether the transaction deleted no committed row of the table: then there are no swaps
 	bool no_deletes = false;
+	bool mark_immediate_errors = false;
+	mutable bool immediate_error = false;
 };
 
 } // namespace duckdb

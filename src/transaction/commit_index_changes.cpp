@@ -177,6 +177,9 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 					}
 					auto key_idx = NumericCast<idx_t>(it - index->deleted_keys.begin());
 					if (index->inserted[key_idx]) {
+						if (!index->generator.entry->IsDeferred() && !storage.RowsChecked()) {
+							transaction.MarkStatementConstraintError();
+						}
 						return ErrorData(
 						    ConstraintException("PRIMARY KEY or UNIQUE constraint violation: duplicate key \"%s\"",
 						                        BoundIndex::AppendRowError(index->generator.key_chunk, i)));
@@ -192,6 +195,76 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 		if (!index->generator.IsRetired()) {
 			prepared.push_back(std::move(index->swaps));
 		}
+	}
+	return ErrorData();
+}
+
+void CommitIndexChanges::RecordAppendError(const IndexEntry &entry, const ErrorData &error) const {
+	if (mark_immediate_errors && error.Type() == ExceptionType::CONSTRAINT && !entry.IsDeferred()) {
+		immediate_error = true;
+	}
+}
+
+ErrorData CommitIndexChanges::VerifyUncheckedRows(DuckTransaction &transaction, LocalTableStorage &storage) {
+	auto &table = storage.table_ref.get();
+	auto &collection = storage.GetCollection();
+	if (collection.GetTotalRows() <= storage.deleted_rows) {
+		return ErrorData();
+	}
+	vector<shared_ptr<IndexEntry>> entries;
+	for (auto entry : table.GetDataTableInfo()->GetIndexes().BuiltIndexEntries()) {
+		if (entry->GetBindState() == IndexBindState::BOUND && entry->IsUnique() && !entry->IsDeferred() &&
+		    entry->GetIndexType() == ART::TYPE_NAME) {
+			entries.push_back(std::move(entry));
+		}
+	}
+	if (entries.empty()) {
+		return ErrorData();
+	}
+	auto indexed_columns = table.GetDataTableInfo()->GetIndexes().GetIndexedColumns();
+	vector<StorageIndex> column_ids;
+	for (auto &column_id : indexed_columns) {
+		column_ids.emplace_back(column_id);
+	}
+	std::sort(column_ids.begin(), column_ids.end());
+	auto &types = collection.GetTypes();
+	DataChunk table_chunk;
+	table_chunk.InitializeEmpty(types);
+	idx_t position = 0;
+	try {
+		for (auto &index_chunk : collection.Chunks(transaction, column_ids)) {
+			for (idx_t c = 0; c < types.size(); c++) {
+				table_chunk.data[c].Reference(Value(types[c]), count_t(index_chunk.size()));
+			}
+			for (idx_t i = 0; i < column_ids.size(); i++) {
+				table_chunk.data[column_ids[i].GetPrimaryIndex()].Reference(index_chunk.data[i]);
+			}
+			table_chunk.CheckCardinality(index_chunk.size());
+			for (auto &entry : entries) {
+				auto swaps = GetSwaps(*entry);
+				if (!swaps) {
+					entry->VerifyAppend(nullptr, table_chunk, nullptr);
+					continue;
+				}
+				SelectionVector sel(index_chunk.size());
+				idx_t count = 0;
+				auto it = std::lower_bound(swaps->positions.begin(), swaps->positions.end(), position);
+				for (idx_t i = 0; i < index_chunk.size(); i++) {
+					if (it != swaps->positions.end() && *it == position + i) {
+						it++;
+						continue;
+					}
+					sel.set_index(count++, i);
+				}
+				DataChunk other_rows;
+				other_rows.InitializeEmpty(types);
+				other_rows.Slice(table_chunk, sel, count);
+				entry->VerifyAppend(nullptr, other_rows, nullptr);
+			}
+			position += index_chunk.size();
+		}
+	} catch (std::exception &ex) {
+		return ErrorData(ex);
 	}
 	return ErrorData();
 }
