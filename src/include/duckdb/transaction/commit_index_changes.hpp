@@ -27,8 +27,12 @@ class IndexKeyGenerator {
 public:
 	IndexKeyGenerator(DatabaseInstance &db, shared_ptr<IndexEntry> entry);
 
-	//! Executes the index expressions on the chunk into key_chunk and generates its keys (empty for NULL keys)
-	void GenerateKeys(DataChunk &table_chunk, ArenaAllocator &arena, unsafe_vector<ARTKey> &keys);
+	//! Executes the index expressions on the chunk into key_chunk and generates its keys (empty for NULL keys).
+	//! Returns false if the entry was retired.
+	bool GenerateKeys(DataChunk &table_chunk, ArenaAllocator &arena, unsafe_vector<ARTKey> &keys);
+	bool IsRetired() const {
+		return retired;
+	}
 
 	shared_ptr<IndexEntry> entry;
 	//! The values of the index expressions of the last chunk
@@ -37,6 +41,7 @@ public:
 private:
 	vector<unique_ptr<Expression>> expressions;
 	ExpressionExecutor executor;
+	bool retired = false;
 };
 
 //! Whether the left key sorts before the right key

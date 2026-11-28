@@ -21,20 +21,33 @@ namespace duckdb {
 
 IndexKeyGenerator::IndexKeyGenerator(DatabaseInstance &db, shared_ptr<IndexEntry> entry_p)
     : entry(std::move(entry_p)), executor(db) {
-	auto handle = entry->GetReadHandle<BoundIndex>();
-	expressions = handle->CopyBoundExpressions();
+	auto handle = entry->TryGetReadHandle<BoundIndex>();
+	if (!handle) {
+		retired = true;
+		return;
+	}
+	expressions = (*handle)->CopyBoundExpressions();
 	for (auto &expression : expressions) {
 		executor.AddExpression(*expression);
 	}
-	key_chunk.Initialize(Allocator::DefaultAllocator(), handle->GetLogicalTypes());
+	key_chunk.Initialize(Allocator::DefaultAllocator(), (*handle)->GetLogicalTypes());
 }
 
-void IndexKeyGenerator::GenerateKeys(DataChunk &table_chunk, ArenaAllocator &arena, unsafe_vector<ARTKey> &keys) {
+bool IndexKeyGenerator::GenerateKeys(DataChunk &table_chunk, ArenaAllocator &arena, unsafe_vector<ARTKey> &keys) {
+	keys.clear();
+	keys.resize(table_chunk.size());
+	if (retired) {
+		return false;
+	}
 	key_chunk.Reset();
 	executor.Execute(table_chunk, key_chunk);
-	keys.resize(key_chunk.size());
-	auto handle = entry->GetReadHandle<BoundIndex>();
-	handle->Cast<ART>().GenerateKeys(arena, key_chunk, keys);
+	auto handle = entry->TryGetReadHandle<BoundIndex>();
+	if (!handle) {
+		retired = true;
+		return false;
+	}
+	(*handle)->Cast<ART>().GenerateKeys(arena, key_chunk, keys);
+	return true;
 }
 
 bool ARTKeyLessThan(const ARTKey &left, const ARTKey &right) {
@@ -176,7 +189,9 @@ ErrorData CommitIndexChanges::Prepare(DuckTransaction &transaction, LocalTableSt
 		}
 	}
 	for (auto &index : indexes) {
-		prepared.push_back(std::move(index->swaps));
+		if (!index->generator.IsRetired()) {
+			prepared.push_back(std::move(index->swaps));
+		}
 	}
 	return ErrorData();
 }

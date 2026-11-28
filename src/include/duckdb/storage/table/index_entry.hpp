@@ -215,6 +215,16 @@ public:
 	IndexReadHandle<TARGET> GetReadHandle() {
 		return IndexReadHandle<TARGET>(shared_from_this(), lock.GetSharedLock());
 	}
+	//! Acquire shared access to a stable physical index, or nullptr if the entry was retired (e.g. a rolled back
+	//! CREATE INDEX, which is removed from the index list without the commit lock)
+	template <class TARGET>
+	unique_ptr<IndexReadHandle<TARGET>> TryGetReadHandle() {
+		auto key = lock.GetSharedLock();
+		if (!owned_index) {
+			return nullptr;
+		}
+		return unique_ptr<IndexReadHandle<TARGET>>(new IndexReadHandle<TARGET>(shared_from_this(), std::move(key)));
+	}
 	//! Acquire exclusive access to the physical index and checkpoint state.
 	template <class TARGET>
 	IndexWriteHandle<TARGET> GetWriteHandle() {
